@@ -1,0 +1,19 @@
+ESOL rows: 1128 | train 676 / calibration 226 / test 226
+Features: Minimum Degree, Molecular Weight, Number of H-Bond Donors, Number of Rings, Number of Rotatable Bonds, Polar Surface Area
+
+== Split conformal (target 90%) ==
+Conformal half-width q: 1.522 log units
+Test coverage: 0.912 | mean interval width: 3.044 | MAE: 0.704
+
+== Trust region (kNN k=5, threshold = 80th pct of calibration distances = 0.758) ==
+region      n  coverage   width     MAE
+inside    180     0.922   3.044   0.656
+outside    46     0.870   3.044   0.892
+API answers 0.796 of test points, abstains on 0.204
+
+== Expansion: 3 rounds, 20 nearest outside points per round moved to training ==
+round  train  test  answered  cov_in  cov_out  cov_all  MAE_in  MAE_out  width
+0        676   226     0.796   0.922    0.870    0.912   0.656    0.892  3.044
+1        696   206     0.854   0.932    0.767    0.908   0.656    0.942  3.134
+2        716   186     0.946   0.938    0.800    0.930   0.640    0.847  3.102
+3        726   176     1.000   0.949      nan    0.949   0.642      nan  3.210
