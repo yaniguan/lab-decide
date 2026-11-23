@@ -2,9 +2,53 @@
 
 An experiment advisor that *knows where it can be trusted*: calibrated answers inside its region, a clear "I don't know" outside, and a region that can grow as the lab adds data.
 
+> **Auto-Lab Ecosystem**: Layer `L6 · Metacognitive & Epistemic Brain` in [auto-lab](https://github.com/yaniguan/auto-lab) · [Project Studio](https://yaniguan.github.io/auto-lab/)
+
 ## Where it fits
 
-In the lab agent on [yaniguan.github.io](https://yaniguan.github.io/), the brain proposes the next experiment. This repo is the decision layer under it: Bayesian optimization (incl. trust-region and safe variants) to choose, and conformal prediction to say how sure it is. The first attempt is a conformal "answer or abstain" demo on public solubility data.
+In the [Auto-Lab](https://github.com/yaniguan/auto-lab) agent ([yaniguan.github.io/auto-lab](https://yaniguan.github.io/auto-lab/) · [yaniguan.github.io](https://yaniguan.github.io/)), the brain proposes the next experiment. This repo is the decision layer under it: Bayesian optimization (incl. trust-region and safe variants) to choose, and conformal prediction to say how sure it is. The first attempt is a conformal "answer or abstain" demo on public solubility data.
+
+## System Profile: Object · Data · Model · Training · History · Unique Properties
+
+Full architectural documentation, conformal calibration math, dataset diagnostics, commit lineage, and sibling-repository contracts are maintained in [`docs/ARCHITECTURE_AND_HISTORY.md`](docs/ARCHITECTURE_AND_HISTORY.md).
+
+### Object
+Epistemic experiment advisor and uncertainty-aware decision layer (`L6`) that delivers distribution-free calibrated prediction intervals inside its empirical applicability domain, emits explicit `"I don't know"` abstentions outside it, and recalibrates as active laboratory measurements expand the boundary.
+
+### Data
+- **Active Benchmark (`ESOL`, Delaney 2004)**: `1,128` compounds fetched on demand into gitignored `data/delaney-processed.csv` (`676` train / `226` calibration / `226` test at `SEED = 0`), predicting `measured log solubility in mols per litre` ($\log_{10} S \in [-11.60, 1.58]$) from `6` physical/topological descriptors while excluding the CSV's pre-fitted `ESOL predicted` column.
+- **Curated Catalog**: Indexes `5` reaction/experiment optimization benchmarks (`ESOL`, `EDBO`, `EDBO+`, `rxn_yields`, `Olympus`), `12` open-source BO & conformal libraries (`BoTorch`, `Ax`, `MAPIE`, `BayBE`, `TuRBO`, `SafeOpt`, `Summit`, `Gryffin`), and `12` foundational & 2024–2026 papers.
+
+### Model
+`GradientBoostingRegressor(random_state=0)` paired with finite-sample Split Conformal Prediction ($\alpha = 0.10$, quantile level $\min(1, \lceil(n_{\text{cal}}+1)(1-\alpha)\rceil / n_{\text{cal}})$ with `method="higher"`) and a standardized 6D Euclidean `NearestNeighbors(n_neighbors=5)` applicability-domain gate (`StandardScaler` + 80th-percentile calibration distance threshold $\tau = 0.758$).
+
+### Training
+CPU-only fitting, split conformal calibration, and 3-round simulated boundary acquisition (`< 1s` on CPU; `numpy`, `pandas`, `scikit-learn`). On ESOL (`n_test = 226`), split conformal achieves **`0.912` marginal test coverage** (`q = 1.522`, width `3.044`, MAE `0.704`), stratifying cleanly into **`0.656` MAE / `0.922` coverage inside** (`n = 180`, `79.6%` answered) vs. **`0.892` MAE / `0.870` coverage outside** (`n = 46`, `20.4%` abstained). Locally adaptive intervals (CQR), separate pool/test splits, and `BoTorch` acquisition loops remain roadmapped next steps.
+
+### History
+Initialized in `41dae77` (`2026-11-18`) with `demo/conformal_trust.py`, reference output (`demo/output.txt`), Python 3.12 CI workflow (`.github/workflows/demo.yml`), and curated Bayesian optimization & conformal prediction resources (`2012`–`2026`).
+
+### Unique Properties
+- **Decoupled Interval Calibration & Abstention**: Separates finite-sample conformal interval calibration ($\hat{q}$) from $k$-NN applicability-domain gating ($d_{\text{5-NN}}(x) \le \tau$) without relying on Gaussian homoscedastic assumptions.
+- **Methodological Transparency**: Explicitly highlights pool-shrinking artifacts (`180` $\rightarrow$ `176` answered test points across active acquisition rounds) rather than overclaiming OOD generalization.
+- **Ecosystem Interfaces**: Pairs at `L6` with [`lab-ask-why`](https://github.com/yaniguan/lab-ask-why) (Socratic claim/rationale probing), aligns upstream with [`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain) (`L3` support-gated `CALiSol-23` & `ScalarObservableTemplate`), [`WignerFlow`](https://github.com/yaniguan/WignerFlow), and [`assayfold`](https://github.com/yaniguan/assayfold), and gates downstream campaigns in [`labshift`](https://github.com/yaniguan/labshift), [`buy-or-make`](https://github.com/yaniguan/buy-or-make) (`L5`), [`lab-rehearsal`](https://github.com/yaniguan/lab-rehearsal), and [`lab-verify`](https://github.com/yaniguan/lab-verify) (`L4`).
+
+## Repository Layout
+
+```text
+lab-decide/
+├── .github/workflows/
+│   └── demo.yml                      # CI workflow running demo/conformal_trust.py on Python 3.12
+├── demo/
+│   ├── conformal_trust.py            # Split conformal + 5-NN trust-region abstention & active expansion
+│   └── output.txt                    # Reference stdout capture on ESOL (CPU)
+├── docs/
+│   └── ARCHITECTURE_AND_HISTORY.md   # Deep technical profile (Object, Data, Model, Training, History)
+├── .gitignore                        # Excludes downloaded ESOL data/
+├── LICENSE                           # MIT License (code)
+├── README.md                         # Overview, demo results, and curated BO & conformal catalog
+└── requirements.txt                  # Dependencies (numpy, pandas, scikit-learn)
+```
 
 ## First attempt
 
