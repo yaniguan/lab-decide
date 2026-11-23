@@ -1,0 +1,6 @@
+name = "lab_decide_lean"
+version = "0.1.0"
+defaultTargets = ["LabDecideLean"]
+
+[[lean_lib]]
+name = "LabDecideLean"
