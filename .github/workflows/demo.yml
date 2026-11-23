@@ -11,5 +11,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt
-      - run: python demo/conformal_trust.py
+      - name: Cache ESOL dataset
+        uses: actions/cache@v4
+        with:
+          path: data/delaney-processed.csv
+          key: esol-delaney-v1-8c06a76f0c64
+      - name: Install package and test dependencies
+        run: pip install -r requirements.txt -e ".[dev,chem]"
+      - name: Run offline unit test suite
+        run: pytest -q
+      - name: Run ESOL conformal demo and verify numerical metrics against demo/output.txt
+        run: |
+          python demo/conformal_trust.py > /tmp/conformal_stdout.txt
+          python -c '
+          import re, sys
+          ref_lines = open("demo/output.txt", encoding="utf-8").read().strip().splitlines()
+          cur_lines = open("/tmp/conformal_stdout.txt", encoding="utf-8").read().strip().splitlines()
+          assert len(ref_lines) == len(cur_lines), f"Line count mismatch: {len(ref_lines)} vs {len(cur_lines)}"
+          num_re = re.compile(r"[-+]?\d+(?:\.\d+)?")
+          for idx, (r_line, c_line) in enumerate(zip(ref_lines, cur_lines), 1):
+              r_nums = [float(x) for x in num_re.findall(r_line)]
+              c_nums = [float(x) for x in num_re.findall(c_line)]
+              assert len(r_nums) == len(c_nums), f"Line {idx} token count mismatch:\n  ref: {r_line}\n  cur: {c_line}"
+              for a, b in zip(r_nums, c_nums):
+                  assert abs(a - b) <= 5e-3, f"Line {idx} drift > 0.005 ({a} vs {b}):\n  ref: {r_line}\n  cur: {c_line}"
+          print("Verified all numerical outputs within +-0.005 of demo/output.txt")
+          '
