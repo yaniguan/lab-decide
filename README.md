@@ -20,10 +20,10 @@ Epistemic experiment advisor and uncertainty-aware decision layer (`L6`) that de
 - **Curated Catalog**: Indexes `5` reaction/experiment optimization benchmarks (`ESOL`, `EDBO`, `EDBO+`, `rxn_yields`, `Olympus`), `12` open-source BO & conformal libraries (`BoTorch`, `Ax`, `MAPIE`, `BayBE`, `TuRBO`, `SafeOpt`, `Summit`, `Gryffin`), and `12` foundational & 2024–2026 papers.
 
 ### Model
-`GradientBoostingRegressor(random_state=0)` paired with finite-sample Split Conformal Prediction ($\alpha = 0.10$, quantile level $\min(1, \lceil(n_{\text{cal}}+1)(1-\alpha)\rceil / n_{\text{cal}})$ with `method="higher"`) and a standardized 6D Euclidean `NearestNeighbors(n_neighbors=5)` applicability-domain gate (`StandardScaler` + 80th-percentile calibration distance threshold $\tau = 0.758$).
+Huber `GradientBoostingRegressor(loss="huber", random_state=0)` paired with finite-sample Mondrian / selective Split Conformal Prediction ($\alpha = 0.10$, exact order-statistic level $\lceil(n_{\text{cal,in}}+1)(1-\alpha)\rceil / n_{\text{cal,in}}$ returning $\infty$ without clamping when $n < (1-\alpha)/\alpha$), locally adaptive distance-normalized & CQR intervals, domain-bound clipping, importance-weighted standardized `NearestNeighbors` applicability-domain gating (finite-sample conformal outlier threshold $\hat{\tau}$), RDKit SMILES-to-descriptor bridging, and `TrustRegionAdvisor` constrained Bayesian optimization (`conformal_ucb`, `conformal_ei`, `safe_expand`).
 
 ### Training
-CPU-only fitting, split conformal calibration, and 3-round simulated boundary acquisition (`< 1s` on CPU; `numpy`, `pandas`, `scikit-learn`). On ESOL (`n_test = 226`), split conformal achieves **`0.912` marginal test coverage** (`q = 1.522`, width `3.044`, MAE `0.704`), stratifying cleanly into **`0.656` MAE / `0.922` coverage inside** (`n = 180`, `79.6%` answered) vs. **`0.892` MAE / `0.870` coverage outside** (`n = 46`, `20.4%` abstained). Locally adaptive intervals (CQR), separate pool/test splits, and `BoTorch` acquisition loops remain roadmapped next steps.
+CPU-only fitting, Mondrian conformal calibration, and 3-round active expansion across a **4-way disjoint split** (`train 561 / pool 224 / calibration 169 / test 169` on `1,123` deduplicated ESOL compounds). On the frozen test set (`n = 169`), selective Mondrian conformal achieves **`0.936` inside coverage** (`MAE 0.640`, adaptive width `3.066`, `n = 141` answered) vs **`1.217` MAE outside** (`width 3.836`, `n = 28` abstained), and diverse boundary acquisition from `pool` tightens `width_in` (`3.066 -> 2.721`) while maintaining `>= 0.910` coverage on the untouched test set.
 
 ### History
 Initialized in `41dae77` (`2026-11-18`) with `demo/conformal_trust.py`, reference output (`demo/output.txt`), Python 3.12 CI workflow (`.github/workflows/demo.yml`), and curated Bayesian optimization & conformal prediction resources (`2012`–`2026`).
@@ -38,49 +38,58 @@ Initialized in `41dae77` (`2026-11-18`) with `demo/conformal_trust.py`, referenc
 ```text
 lab-decide/
 ├── .github/workflows/
-│   └── demo.yml                      # CI workflow running demo/conformal_trust.py on Python 3.12
+│   └── demo.yml                      # CI: cache ESOL CSV, run offline pytest, verify output within +-0.005
 ├── demo/
-│   ├── conformal_trust.py            # Split conformal + 5-NN trust-region abstention & active expansion
-│   └── output.txt                    # Reference stdout capture on ESOL (CPU)
+│   ├── calisol_conformal.py          # CALiSol-23 publication-DOI conformal & kernel-support benchmark
+│   ├── conformal_trust.py            # Mondrian conformal + 4-way split expansion + constrained BO demo
+│   └── output.txt                    # Deterministic reference stdout capture on ESOL (CPU)
 ├── docs/
 │   └── ARCHITECTURE_AND_HISTORY.md   # Deep technical profile (Object, Data, Model, Training, History)
-├── .gitignore                        # Excludes downloaded ESOL data/
+├── src/lab_decide/                   # Installable package (ConformalTrustModel, TrustRegionAdvisor, RDKit, DecisionEnvelope)
+├── tests/
+│   └── test_conformal_trust.py       # Offline pytest regression suite (#1..#22)
+├── .gitignore                        # Excludes downloaded ESOL data/ & caches
 ├── LICENSE                           # MIT License (code)
+├── pyproject.toml                    # Package metadata & `lab-decide` CLI console script
 ├── README.md                         # Overview, demo results, and curated BO & conformal catalog
-└── requirements.txt                  # Dependencies (numpy, pandas, scikit-learn)
+└── requirements.txt                  # Bounded dependencies (numpy, pandas, scikit-learn)
 ```
 
-## First attempt
-
-Data: ESOL aqueous solubility (1128 compounds, Delaney 2004). Inputs: six simple descriptors from the file. The file's own 'ESOL predicted' column is not used. Gradient boosting + split conformal prediction at 90%. A point is in the trusted region if its kNN distance to training data is below the 80th percentile of calibration distances. Then three rounds of "new lab data" move the nearest outside test points into training (20, 20, then the last 10).
+## Quickstart & CLI
 
 ```bash
-pip install numpy pandas scikit-learn
+pip install -r requirements.txt -e .
 python demo/conformal_trust.py
+lab-decide --nonconformity cqr --split scaffold
+lab-decide --dataset calisol23 --offline
+lab-decide --export-schema decision_envelope.schema.json
 ```
 
-Output (Linux, CPU only, 2026-11-18):
+Output (`demo/output.txt`, CPU only):
 
 ```
-ESOL rows: 1128 | train 676 / calibration 226 / test 226
+ESOL clean rows: 1123 (deduped 5 duplicate SMILES) | train 561 / pool 224 / calibration 169 / test 169
 Features: Minimum Degree, Molecular Weight, Number of H-Bond Donors, Number of Rings, Number of Rotatable Bonds, Polar Surface Area
 
-== Split conformal (target 90%) ==
-Conformal half-width q: 1.522 log units
-Test coverage: 0.912 | mean interval width: 3.044 | MAE: 0.704
+== Split conformal (target 90%, domain-clipped) ==
+Marginal half-width q_all: 1.291 log units | Mondrian inside q_in: 1.296 log units
+Test coverage: 0.917 | mean interval width: 3.184 | MAE: 0.735
 
-== Trust region (kNN k=5, threshold = 80th pct of calibration distances = 0.758) ==
+== Mondrian trust region (importance-weighted kNN k=5, conformal 80th-pct threshold = 0.675) ==
 region      n  coverage   width     MAE
-inside    180     0.922   3.044   0.656
-outside    46     0.870   3.044   0.892
-API answers 0.796 of test points, abstains on 0.204
+inside    141     0.936   3.066   0.640
+outside    28     0.821   3.836   1.217
+API answers 0.834 of frozen test points, abstains on 0.166
 
-== Expansion: 3 rounds, 20 nearest outside points per round moved to training ==
-round  train  test  answered  cov_in  cov_out  cov_all  MAE_in  MAE_out  width
-0        676   226     0.796   0.922    0.870    0.912   0.656    0.892  3.044
-1        696   206     0.854   0.932    0.767    0.908   0.656    0.942  3.134
-2        716   186     0.946   0.938    0.800    0.930   0.640    0.847  3.102
-3        726   176     1.000   0.949      nan    0.949   0.642      nan  3.210
+== Expansion on frozen test set (diverse boundary acquisition from separate pool + 20% cal update) ==
+round  train  pool  test  n_in n_out  answered  cov_in  cov_out  cov_all  MAE_in  MAE_out width_in
+0        561   224   169   141    28     0.834   0.936    0.821    0.917   0.640    1.217    3.066
+1        577   204   169   143    26     0.846   0.930    0.808    0.911   0.629    1.177    2.798
+2        587   191   169   144    25     0.852   0.917    0.840    0.905   0.645    1.242    2.708
+3        589   189   169   144    25     0.852   0.910    0.840    0.899   0.641    1.223    2.721
+
+== Trust-region constrained BO (conformal UCB top-10 on pool) ==
+Constrained top logS: 1.580 (pred MAE 0.514) | Unconstrained greedy pred MAE: 0.651 (OOD frac 0.200)
 ```
 
 Coverage stays near the 90% target, and error is lower inside the region (MAE 0.66) than outside (0.89). The answered fraction rises from 0.80 to 1.00, but read this with care: the number of answered test points stays about the same (180, then 176). The rise comes from moving outside points into training, not from the region reaching new points. Next: locally adaptive interval widths, a fresh held-out test set, and a BoTorch loop that only proposes inside the region.
