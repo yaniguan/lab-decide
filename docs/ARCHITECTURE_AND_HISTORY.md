@@ -52,9 +52,26 @@ Within the [Auto-Lab](https://github.com/yaniguan/auto-lab) Brain/Body architect
   - `Minimum Degree` is highly skewed (`1` on `1,060 / 1,128 = 94.0%` of compounds, `2` on `67` unsubstituted ring systems, `0` on `1` single-heavy-atom compound).
   - Stripping trailing whitespace on the `smiles` column reveals `5` duplicate SMILES entries in `delaney-processed.csv`; uniform index splitting does not enforce Bemis-Murcko scaffold disjointness.
 
+### Open Calibration Dataset Registry (`src/lab_decide/datasets.py` & `scripts/fetch_open_datasets.py`)
+In addition to the default ESOL benchmark, `lab-decide` provides a typed `OpenCalibrationDataset` registry (`OPEN_CALIBRATION_DATASETS`) covering **`11` live-verified open-source datasets** across molecular solubility, electrolyte solvation, ADMET, and high-throughput reaction optimization (Bayesian optimization). Every entry carries verified SPDX open licensing (`commercial_use_ok = True`), optional SHA-256 pinning, on-demand atomic caching under gitignored `data/`, and deterministic leakage-free CSV/TSV/JSON/JSONL schema loaders feeding `fit_and_calibrate`, `ConformalTrustModel`, and `TrustRegionAdvisor`:
+
+| `dataset_id` | Domain | Target (`target_unit`) | `n_records` | SPDX License | Leakage Exclusions | Primary Citation / Provenance |
+|---|---|---|---:|---|---|---|
+| `esol_delaney` | `molecular_solubility` | `log10(mol/L)` | `1,128` | `MIT` | `ESOL predicted log solubility...` | Delaney, *JCICS* 2004 (`10.1021/ci034243x`) |
+| `aqsoldb` | `molecular_solubility` | `log10(mol/L)` | `9,982` | `CC0-1.0` | `SD`, `Ocurrences`, `Group` | Sorkun et al., *Sci. Data* 2019 (`10.1038/s41597-019-0151-1`; Dataverse `10.7910/DVN/OVHAW8`) |
+| `bigsoldb_v2_2` | `molecular_solubility` | `log10(mol/L)` | `125,752` | `CC-BY-4.0` | `Solubility(mol/L)`, `Solubility(mole_fraction)`, `LogS(mole_fraction)` | Krasnov et al., *Sci. Data* 2025 / Zenodo 2026 (`10.5281/zenodo.22648301`) |
+| `calisol23` | `electrolyte_solvation` | `log1p(mS/cm)` | `13,825` | `CC-BY-4.0` | DOI-stratified (`salt_other`, `solv_other_mass`) | de Blasio et al., *Sci. Data* 2024 (`10.1038/s41597-024-03575-8`) |
+| `freesolv` | `admet` | `kcal/mol` | `642` | `CC-BY-4.0` | `calc`, `d_calc`, `calc_h`, `calc_charging`, `calc_vdw`, `h_solv` | Mobley & Guthrie, *JCAMD* 2014 (`10.1007/s10822-014-9747-x`) |
+| `lipophilicity_astrazeneca` | `admet` | `logD7.4` | `4,200` | `CC-BY-SA-3.0` | Pure structural SMILES featurization | AstraZeneca ChEMBL3301361 (`10.6019/CHEMBL3301361`; TDC / ADMET-AI) |
+| `biogen_adme` | `admet` | `log10(mL/min/kg)` | `3,521` | `MIT` | Excludes 5 sibling measured ADME endpoints | Fang et al., *JCIM* 2023 (`10.1021/acs.jcim.3c00160`; Biogen Research) |
+| `buchwald_hartwig_doyle` | `reaction_optimization` | `yield_pct` | `4,599` | `Apache-2.0` | `plate`, `row`, `col`, reagent index IDs | Ahneman et al., *Science* 2018 (`10.1126/science.aar5169`; BayBE) |
+| `suzuki_miyaura_perera` | `reaction_optimization` | `yield_pct` | `5,760` | `MIT` | Row index `Unnamed: 0`; scales `[0,1]` to `%` | Perera et al., *Science* 2018 (`10.1126/science.aap9112`; `rxn_yields`) |
+| `direct_arylation_shields` | `reaction_optimization` | `yield_pct` | `1,728` | `Apache-2.0` | Row index `entry` | Shields et al., *Nature* 2021 (`10.1038/s41586-021-03213-y`; EDBO / BayBE) |
+| `bh_hte_ood_2026` | `reaction_optimization` | `yield_pct` | `27,497` | `CC-BY-4.0` | Binary threshold `labels`, `DRFP`, `QM`, cluster IDs | Neves et al., *Nat. Comput. Sci.* 2026 (`10.1038/s43588-026-01017-6`; Zenodo `19636649`) |
+
 ### Curated Optimization & Conformal Ecosystem Catalog
 `README.md` curates:
-- **5 Benchmark Datasets**: `ESOL` (Delaney 2004), `EDBO` reaction optimization (`MIT`), `EDBO+` multi-objective reaction optimization, `rxn_yields` (Buchwald-Hartwig / Suzuki HTE), and `Olympus` (`MIT`).
+- **11 Integrated Open Calibration Datasets + 4 Optimization Suites**: Spanning `ESOL`, `AqSolDB`, `BigSolDB 2.2`, `CALiSol-23`, `FreeSolv`, `Lipophilicity_AstraZeneca`, `Biogen Computational-ADME`, `Doyle Buchwald-Hartwig HTE`, `Perera Suzuki-Miyaura HTE`, `Shields Direct Arylation`, and `BH-HTE-OOD 2026`, alongside `EDBO`, `EDBO+`, `rxn_yields`, and `Olympus`.
 - **12 Open-Source BO & Conformal Libraries**: `botorch`, `Ax`, `MAPIE`, `awesome-conformal-prediction`, `aangelopoulos/conformal-prediction`, `baybe`, `TuRBO`, `edbo`, `summit`, `SafeOpt`, `olympus`, and `gryffin`.
 - **12 Foundational & 2024–2026 Papers**: Spanning Snoek et al. (2012), `BoTorch` (`arXiv:1910.06403`), `TuRBO` (`arXiv:1910.01739`), `SafeOpt` (`arXiv:1509.01066`), Angelopoulos & Bates (`arXiv:2107.07511`), Conformal BO (`arXiv:2210.12496`, `arXiv:2306.17815`, `arXiv:2411.17387`), Safe Counterfactual BO (`arXiv:2607.05620`), and Physical SDL Testbeds (`arXiv:2611.11690`).
 
@@ -108,6 +125,8 @@ As `README.md` explicitly cautions, the rise in `answered` fraction from `0.796`
 | Commit | Date | Author | Branch / Ref | Summary |
 |---|---|---|---|---|
 | `41dae77` (`41dae77ebcbabf62103cbb65fefe75eb129558bc`) | `2026-11-18` | Yani Guan | `main` | Initial commit (`Add curated resources and first demo`): added `demo/conformal_trust.py` (ESOL GBDT surrogate + 90% split conformal prediction + 5-NN 80th-percentile trust-region abstention + 3-round boundary acquisition demo), `demo/output.txt`, `.github/workflows/demo.yml` (Python 3.12 CI), and curated BO / conformal datasets, libraries, and papers (`2012`–`2026`) in `README.md`. |
+| `6957f12` | `2026-11-25` | Yani Guan | `main` (PR `#30`) | Phase 2 audit hardening & `autolab-wire/v1` L6 gate: exact rational `conformal_rank` parity with `LabDecideLean`, likelihood-ratio weighted expansion (`weighted_conformal_quantile`), locally scaled `CQR-r` crossing guards, zero-variance OOD protection, and SHA-256 certified ledger recalibration. |
+| `feat/open-datasets-2026` | `2026-11-25` | Yani Guan | `feat/open-datasets-2026` | Integrated `OpenCalibrationDataset` registry (`src/lab_decide/datasets.py`), `scripts/fetch_open_datasets.py`, and `tests/test_open_datasets_2026.py` covering `10` new open-source molecular solubility, electrolyte solvation, ADMET, and HTE reaction optimization benchmarks (`AqSolDB`, `BigSolDB 2.2`, `CALiSol-23`, `FreeSolv`, `Lipophilicity_AstraZeneca`, `Biogen ADME`, `Doyle Buchwald-Hartwig`, `Perera Suzuki-Miyaura`, `Shields Direct Arylation`, and `BH-HTE-OOD 2026`). |
 
 ---
 
