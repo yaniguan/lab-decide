@@ -269,9 +269,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--nonconformity",
-        choices=("normalized", "cqr", "absolute"),
+        choices=("normalized", "cqr", "cqr_r", "absolute"),
         default="normalized",
-        help="Conformal nonconformity score type ('normalized' distance-adaptive, 'cqr', or 'absolute').",
+        help="Conformal nonconformity score type ('normalized', 'cqr', 'cqr_r', or 'absolute').",
     )
     parser.add_argument("--alpha", type=float, default=0.10, help="Miscoverage rate alpha in (0, 1).")
     parser.add_argument("--k", type=int, default=5, help="Number of nearest neighbors for trust distance.")
@@ -338,6 +338,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 alpha=args.alpha,
                 trust_pct=args.trust_pct,
                 seed=args.seed,
+                nonconformity=args.nonconformity,
             )
             clean_cal = _json_clean(cal_res)
             if out_fmt == "json":

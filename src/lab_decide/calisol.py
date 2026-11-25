@@ -8,7 +8,12 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from lab_decide.conformal import ConformalTrustModel, fit_and_calibrate, summarize
+from lab_decide.conformal import (
+    ConformalTrustModel,
+    fit_and_calibrate,
+    summarize,
+    winkler_interval_score,
+)
 
 # Exact publication-DOI holdouts shared with sibling repo labbench-posttrain/bioenvs/calisol.py
 CALISOL_VAL_DOIS: frozenset[str] = frozenset(
@@ -165,23 +170,46 @@ def load_calisol_csv_records(csv_path: str) -> list[dict[str, Any]]:
 
 
 def featurize_calisol_records(records: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Featurize electrolyte records into tabular descriptors predicting `log1p(k_mS_cm)`."""
-    feat_names = ["T_K", "c_mol", "log_c"] + [f"salt_{s}" for s in COMMON_SALTS] + [f"solv_{s}" for s in COMMON_SOLVENTS]
+    """Featurize electrolyte records into tabular descriptors predicting `log1p(k_mS_cm)`.
+
+    Includes explicit `salt_other` and `solv_other_mass` out-of-vocabulary residual columns
+    so unlisted salts (e.g. `NaPF6`) or solvents (e.g. `THF`) never collapse to zero vectors.
+    """
+    feat_names = (
+        ["T_K", "c_mol", "log_c"]
+        + [f"salt_{s}" for s in COMMON_SALTS]
+        + ["salt_other"]
+        + [f"solv_{s}" for s in COMMON_SOLVENTS]
+        + ["solv_other_mass"]
+    )
+    common_salt_set = set(COMMON_SALTS)
+    common_solv_set = set(COMMON_SOLVENTS)
     X = np.zeros((len(records), len(feat_names)), dtype=np.float64)
     y = np.zeros(len(records), dtype=np.float64)
+    salt_other_col = 3 + len(COMMON_SALTS)
+    solv_base_col = salt_other_col + 1
+    solv_other_col = solv_base_col + len(COMMON_SOLVENTS)
+
     for i, rec in enumerate(records):
         c_val = max(float(rec["c"]), 1e-3)
         X[i, 0] = float(rec["T_K"])
         X[i, 1] = c_val
         X[i, 2] = math.log(c_val)
-        salt = str(rec["salt"])
-        for j, s_name in enumerate(COMMON_SALTS):
-            if salt == s_name:
-                X[i, 3 + j] = 1.0
+        salt = str(rec["salt"]).strip()
+        if salt in common_salt_set:
+            for j, s_name in enumerate(COMMON_SALTS):
+                if salt == s_name:
+                    X[i, 3 + j] = 1.0
+        else:
+            X[i, salt_other_col] = 1.0
+
         solv = rec["solvents"]
-        base = 3 + len(COMMON_SALTS)
         for j, sv_name in enumerate(COMMON_SOLVENTS):
-            X[i, base + j] = float(solv.get(sv_name, 0.0))
+            X[i, solv_base_col + j] = float(solv.get(sv_name, 0.0))
+        other_mass = sum(
+            max(0.0, float(v)) for sv_k, v in solv.items() if str(sv_k).strip() not in common_solv_set
+        )
+        X[i, solv_other_col] = other_mass
         y[i] = math.log1p(float(rec["k_mS_cm"]))
     return X, y, feat_names
 
@@ -193,6 +221,7 @@ def evaluate_calisol_conformal(
     trust_pct: float = 80.0,
     seed: int = 0,
     max_records_per_split: int = 600,
+    nonconformity: str = "normalized",
 ) -> dict[str, Any]:
     """Evaluate Mondrian conformal gating vs CALiSol-23 formulation kernel support across DOI splits."""
     if csv_path and os.path.exists(csv_path):
@@ -225,6 +254,7 @@ def evaluate_calisol_conformal(
         alpha=alpha,
         trust_pct=trust_pct,
         seed=seed,
+        nonconformity=nonconformity,
         domain_bounds=(0.0, 6.0),
         feature_names=feat_names,
     )
@@ -233,6 +263,7 @@ def evaluate_calisol_conformal(
     inside = np.asarray(res["trusted"], dtype=bool)
     c_in, w_in, e_in = summarize(yt, res["lo"], res["hi"], inside, pred=res["pred"])
     c_out, _, e_out = summarize(yt, res["lo"], res["hi"], ~inside, pred=res["pred"])
+    wink_in = winkler_interval_score(yt, res["lo"], res["hi"], alpha=alpha, mask=inside)
 
     tr_recs = [r for r in sampled if r["split"] == "train"]
     te_recs = [r for r in sampled if r["split"] == "test"]
@@ -240,12 +271,13 @@ def evaluate_calisol_conformal(
         [formulation_kernel_support(r, tr_recs)[0] for r in te_recs],
         dtype=np.float64,
     )
-    # Gate agreement between kNN trust region (inside) and kernel support >= 20th percentile
+    # Gate agreement between kNN trust region (inside) and kernel support >= (100 - trust_pct)th percentile
     k_gate = kernel_supports >= np.percentile(kernel_supports, 100.0 - trust_pct)
     gate_agreement = float(np.mean(inside == k_gate))
 
     return {
         "source": source,
+        "nonconformity": nonconformity,
         "n_train": int(np.sum(tr_mask)),
         "n_cal": int(np.sum(cal_mask)),
         "n_test": int(np.sum(te_mask)),
@@ -255,5 +287,6 @@ def evaluate_calisol_conformal(
         "mae_in": e_in,
         "mae_out": e_out,
         "width_in": w_in,
+        "winkler_in": wink_in,
         "knn_vs_kernel_support_agreement": gate_agreement,
     }

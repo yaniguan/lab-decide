@@ -6,7 +6,8 @@ Maintains per-scaffold Mondrian residual windows and adapts each scaffold's
 miscoverage parameter online via:
     alpha_{t+1} = clip(alpha_t + gamma * (alpha_target - err_t), 0.01, 0.50)
 while strictly honoring `LabDecideLean` finite-sample order-statistic ranks
-without clamping when calibration support is undersized.
+without clamping when calibration support is undersized and freezing `alpha_t`
+across abstained cold-start observations.
 """
 
 from __future__ import annotations
@@ -15,6 +16,9 @@ import math
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
+from fractions import Fraction
+from functools import lru_cache
 
 import numpy as np
 
@@ -30,22 +34,59 @@ class ACIIntervalPrediction:
     alpha_used: float
     abstained: bool
     n_calib_bucket: int
+    pooled_fallback: bool = False
 
     @property
     def width(self) -> float:
         return float(self.upper - self.lower)
 
 
-def conformal_order_rank(n_calib: int, alpha: float) -> int:
-    """Exact finite-sample order-statistic rank ceil((n + 1) * (1 - alpha))."""
-    if n_calib < 0:
+@lru_cache(maxsize=4096)
+def _float_to_fraction(fval: float) -> Fraction:
+    return Fraction(str(fval))
+
+
+def _to_exact_fraction(value: float | int | Fraction | Decimal) -> Fraction:
+    if isinstance(value, Fraction):
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError(f"Expected finite numeric value, got {value}")
+        return Fraction(value)
+    if isinstance(value, (int, np.integer)):
+        return Fraction(int(value), 1)
+    fval = float(value)
+    if not math.isfinite(fval):
+        raise ValueError(f"Expected finite numeric value, got {value}")
+    return _float_to_fraction(fval)
+
+
+def conformal_order_rank(
+    n_calib: int,
+    alpha: float | Fraction | Decimal,
+    *,
+    alpha_permille: int | None = None,
+) -> int:
+    """Exact finite-sample order-statistic rank `ceil((n + 1) * (1 - alpha))` matching `LabDecideLean.conformalRank`."""
+    n_int = int(n_calib)
+    if n_int < 0:
         raise ValueError("n_calib must be non-negative")
-    if not (0.0 < alpha < 1.0):
+    if alpha_permille is not None:
+        ap = int(alpha_permille)
+        if not (0 < ap < 1000):
+            raise ValueError("alpha_permille must lie strictly in (0, 1000)")
+        return ((n_int + 1) * (1000 - ap) + 999) // 1000
+
+    alpha_frac = _to_exact_fraction(alpha)
+    if not (Fraction(0, 1) < alpha_frac < Fraction(1, 1)):
         raise ValueError("alpha must lie strictly in (0, 1)")
-    return math.ceil((n_calib + 1) * (1.0 - alpha) - 1e-12)
+    return int(math.ceil((n_int + 1) * (Fraction(1, 1) - alpha_frac)))
 
 
-def finite_sample_conformal_quantile(residuals: Sequence[float], alpha: float) -> float:
+def finite_sample_conformal_quantile(
+    residuals: Sequence[float],
+    alpha: float | Fraction | Decimal,
+) -> float:
     """Exact finite-sample conformal quantile; returns +inf instead of clamping k > n."""
     n_cal = len(residuals)
     if n_cal == 0:
@@ -110,6 +151,8 @@ class ScaffoldMondrianACI:
         alpha_bounds: tuple[float, float] = (0.01, 0.50),
         rolling_window: int = 100,
         phys_bounds: tuple[float, float] = (-15.0, 1.75),
+        *,
+        hierarchical_fallback: bool = False,
     ) -> None:
         if not (0.0 < alpha_target < 1.0):
             raise ValueError("alpha_target must lie strictly in (0, 1)")
@@ -125,15 +168,19 @@ class ScaffoldMondrianACI:
         self.alpha_min, self.alpha_max = float(alpha_bounds[0]), float(alpha_bounds[1])
         self.rolling_window = int(rolling_window)
         self.phys_min, self.phys_max = float(phys_bounds[0]), float(phys_bounds[1])
+        self.hierarchical_fallback = bool(hierarchical_fallback)
 
         self._buckets: dict[str, deque[float]] = {}
         self._alpha_by_bucket: dict[str, float] = {}
+        self._global_pool: deque[float] = deque(maxlen=max(self.rolling_window * 4, 100))
         for scaf, res_seq in initial_bucket_residuals.items():
             cleaned = [abs(float(r)) for r in res_seq]
             self._buckets[scaf] = deque(
                 cleaned[-self.rolling_window :], maxlen=self.rolling_window
             )
             self._alpha_by_bucket[scaf] = self.alpha_target
+            for r_val in cleaned[-self.rolling_window :]:
+                self._global_pool.append(r_val)
 
     def alpha_for_scaffold(self, scaffold_id: str) -> float:
         return self._alpha_by_bucket.get(scaffold_id, self.alpha_target)
@@ -147,6 +194,14 @@ class ScaffoldMondrianACI:
             if bucket is not None
             else float("inf")
         )
+        used_pool = False
+        if not math.isfinite(q_hat) and self.hierarchical_fallback and len(self._global_pool) > 0:
+            q_global = finite_sample_conformal_quantile(tuple(self._global_pool), alpha_cur)
+            if math.isfinite(q_global):
+                bucket_max = max(bucket) if bucket else 0.0
+                q_hat = float(max(q_global, bucket_max))
+                used_pool = True
+
         if not math.isfinite(q_hat):
             return ACIIntervalPrediction(
                 scaffold_id=scaffold_id,
@@ -156,6 +211,7 @@ class ScaffoldMondrianACI:
                 alpha_used=alpha_cur,
                 abstained=True,
                 n_calib_bucket=n_cal,
+                pooled_fallback=False,
             )
         lo = max(self.phys_min, min(self.phys_max, point_pred - q_hat))
         hi = max(lo, min(self.phys_max, point_pred + q_hat))
@@ -167,21 +223,30 @@ class ScaffoldMondrianACI:
             alpha_used=alpha_cur,
             abstained=False,
             n_calib_bucket=n_cal,
+            pooled_fallback=used_pool,
         )
 
     def update(self, prediction: ACIIntervalPrediction, y_true: float) -> float:
-        """Update scaffold alpha_t via Gibbs-Candes step and append latest residual."""
+        """Append residual and update `alpha_t` ONLY when prediction did not abstain."""
         scaf = prediction.scaffold_id
         if scaf not in self._buckets:
             self._buckets[scaf] = deque(maxlen=self.rolling_window)
             self._alpha_by_bucket[scaf] = self.alpha_target
 
-        err_t = 0.0 if (prediction.lower <= y_true <= prediction.upper) else 1.0
+        residual = abs(float(y_true - prediction.point_pred))
+        self._buckets[scaf].append(residual)
+        self._global_pool.append(residual)
+
         alpha_cur = self._alpha_by_bucket[scaf]
+        if prediction.abstained:
+            # Never score `err_t` against uninformative physical bounds [-15.0, 1.75];
+            # freeze `alpha_t` until the bucket reaches finite-sample certifiability.
+            return alpha_cur
+
+        err_t = 0.0 if (prediction.lower <= y_true <= prediction.upper) else 1.0
         alpha_next = alpha_cur + self.gamma * (self.alpha_target - err_t)
         alpha_clipped = max(self.alpha_min, min(self.alpha_max, alpha_next))
         self._alpha_by_bucket[scaf] = alpha_clipped
-        self._buckets[scaf].append(abs(float(y_true - prediction.point_pred)))
         return alpha_clipped
 
 

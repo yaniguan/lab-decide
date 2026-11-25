@@ -12,6 +12,7 @@ from .chem_rrt_frontier import (
     ChemRRTExplorer,
     FrontierActionRecord,
     TreeEdge,
+    frontier_outer_radius,
     verify_frontier_action,
 )
 from .chem_rrt_frontier import (
@@ -38,6 +39,7 @@ __all__ = [
     "TreeEdge",
     "conformal_order_rank",
     "finite_sample_conformal_quantile",
+    "frontier_outer_radius",
     "run_chem_rrt_benchmark",
     "run_mondrian_aci_benchmark",
     "verify_frontier_action",

@@ -15,8 +15,7 @@ API answers 0.834 of frozen test points, abstains on 0.166
 round  train  pool  test  n_in n_out  answered  cov_in  cov_out  cov_all  MAE_in  MAE_out width_in
 0        561   224   169   141    28     0.834   0.936    0.821    0.917   0.640    1.217    3.066
 1        577   204   169   143    26     0.846   0.930    0.808    0.911   0.629    1.177    2.798
-2        587   191   169   144    25     0.852   0.917    0.840    0.905   0.645    1.242    2.708
-3        589   189   169   144    25     0.852   0.910    0.840    0.899   0.641    1.223    2.721
+2        588   190   169   144    25     0.852   0.931    0.840    0.917   0.650    1.270    2.880
 
 == Trust-region constrained BO (conformal UCB top-10 on pool) ==
 Constrained top logS: 1.580 (pred MAE 0.514) | Unconstrained greedy pred MAE: 0.651 (OOD frac 0.200)

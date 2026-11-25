@@ -3,11 +3,19 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from statistics import NormalDist
 from typing import Any, Sequence
 
 import numpy as np
 
-from lab_decide.conformal import ConformalTrustModel, fit_and_calibrate, summarize
+from lab_decide.conformal import (
+    ConformalTrustModel,
+    compute_covariate_shift_weights,
+    fit_and_calibrate,
+    summarize,
+)
+
+_STD_NORM = NormalDist(0.0, 1.0)
 
 
 def select_diverse_boundary_batch(
@@ -91,10 +99,18 @@ def run_expansion_campaign(
     distance_weighting: str = "importance",
     domain_bounds: tuple[float, float] | None = (-15.0, 1.75),
     feature_names: Sequence[str] | None = None,
+    reweight_covariate_shift: bool = True,
 ) -> tuple[list[dict[str, Any]], ConformalTrustModel]:
-    """Run active trust-region expansion acquiring strictly from `pool_idx` while holding `test_idx` frozen."""
+    """Run active trust-region expansion acquiring strictly from `pool_idx` while holding `test_idx` frozen.
+
+    When `reweight_covariate_shift=True` (default), outer-shell calibration additions are
+    reweighted via Tibshirani-Foygel-Barber likelihood-ratio importance weights relative to
+    the initial i.i.d. reference calibration split `cal_idx`.
+    """
     cur_tr = np.array(train_idx, dtype=int, copy=True)
     cur_pool = np.array(pool_idx, dtype=int, copy=True)
+    ref_cal = np.array(cal_idx, dtype=int, copy=True)
+    act_cal = np.zeros(0, dtype=int)
     cur_cal = np.array(cal_idx, dtype=int, copy=True)
     frozen_te = np.array(test_idx, dtype=int, copy=True)
 
@@ -136,10 +152,21 @@ def run_expansion_campaign(
                 step = max(1, acquired_global.size // n_to_cal)
                 cal_slice_mask = np.zeros(acquired_global.size, dtype=bool)
                 cal_slice_mask[::step][:n_to_cal] = True
-                cur_cal = np.concatenate([cur_cal, acquired_global[cal_slice_mask]])
+                act_cal = np.concatenate([act_cal, acquired_global[cal_slice_mask]])
+                cur_cal = np.concatenate([ref_cal, act_cal])
                 cur_tr = np.concatenate([cur_tr, acquired_global[~cal_slice_mask]])
             else:
                 cur_tr = np.concatenate([cur_tr, acquired_global])
+
+            cal_w: np.ndarray | None = None
+            if reweight_covariate_shift and act_cal.size > 0:
+                cal_w = compute_covariate_shift_weights(
+                    X[ref_cal],
+                    X[act_cal],
+                    scaler_mean=advisor.scaler_mean,
+                    scaler_scale=advisor.scaler_scale,
+                    feature_weights=advisor.feature_weights,
+                )
 
             advisor = fit_and_calibrate(
                 X[cur_tr],
@@ -155,6 +182,7 @@ def run_expansion_campaign(
                 distance_weighting=distance_weighting,
                 domain_bounds=domain_bounds,
                 feature_names=feature_names,
+                cal_weights=cal_w,
             )
 
         res = advisor.predict(X[frozen_te], use_mondrian=True)
@@ -243,7 +271,9 @@ class TrustRegionAdvisor:
         hi = np.asarray(res["hi"], dtype=np.float64)
         dists = np.asarray(res["distance"], dtype=np.float64)
         trusted = np.asarray(res["trusted"], dtype=bool)
-        half_w = 0.5 * (hi - lo)
+        half_w = np.maximum(0.5 * (hi - lo), 0.0)
+        upper_rad = np.maximum(hi - pred, 0.0)
+        lower_rad = np.maximum(pred - lo, 0.0)
 
         if mode == "safe_expand":
             chosen = select_diverse_boundary_batch(
@@ -268,10 +298,19 @@ class TrustRegionAdvisor:
             ]
 
         if mode == "conformal_ucb":
-            raw_util = (pred + beta * half_w) if maximize else -(pred - beta * half_w)
+            # Respect asymmetric directional bounds (at beta=1: `hi` when maximize=True, `-lo` when False)
+            raw_util = (pred + float(beta) * upper_rad) if maximize else -(pred - float(beta) * lower_rad)
         elif mode == "conformal_ei":
-            ref = (float(np.max(pred[trusted])) if np.any(trusted) else float(np.max(pred))) if best_y is None else float(best_y)
-            sigma = np.maximum(half_w / 1.64485, 1e-6)
+            if best_y is None:
+                pool_vals = pred[trusted] if np.any(trusted) else pred
+                ref = float(np.max(pool_vals) if maximize else np.min(pool_vals))
+            else:
+                ref = float(best_y)
+            alpha_clamped = min(max(float(self.model.alpha), 1e-6), 1.0 - 1e-6)
+            z_div = max(_STD_NORM.inv_cdf(1.0 - 0.5 * alpha_clamped), 1e-6)
+            dir_rad = upper_rad if maximize else lower_rad
+            eff_rad = np.where(dir_rad > 1e-9, dir_rad, half_w)
+            sigma = np.maximum(eff_rad / z_div, 1e-6)
             imp = (pred - ref) if maximize else (ref - pred)
             z = imp / sigma
             raw_util = imp * _norm_cdf(z) + sigma * _norm_pdf(z)
