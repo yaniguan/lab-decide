@@ -3,17 +3,25 @@
 Inspired by FutureHouse ether0 molecular design debates and active applicability-domain
 expansion in self-driving laboratories. Grows a Rapidly-Exploring Random Tree (Chem-RRT)
 of micro-volume (<= 10.0 uL), in-stock stepping-stone calibration probes strictly inside
-annular frontier shells `tau_t < d(x, S_t) <= (1 + eta) * tau_t` toward high-ring novel
-target scaffolds without ever taking an uncalibrated deep-OOD production leap.
-Synchronized with `LabDecideLean.FrontierProbeSpec` and `checkFrontierAction`.
+annular frontier shells `tau_t < d(x, S_t) <= frontierOuterRadius(tau_t, eta)` toward high-ring
+novel target scaffolds without ever taking an uncalibrated deep-OOD production leap or chaining
+unassayed probes prior to wet-lab / `lab-attrib` certification.
+Synchronized with `LabDecideLean.FrontierProbeSpec`, `checkFrontierAction`, and `checkCertifiedChain`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import math
+import re
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
+from fractions import Fraction
+from typing import Any
 
 import numpy as np
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 @dataclass(frozen=True)
@@ -36,6 +44,7 @@ class TreeEdge:
     child_id: str
     step_distance: float
     assay_vol_ul: float
+    certified: bool = True
 
 
 @dataclass(frozen=True)
@@ -52,6 +61,41 @@ class FrontierActionRecord:
     used_as_point_prediction: bool
     guard_passed: bool
     violation_rule: str | None
+    certified: bool = True
+
+
+def _to_exact_fraction(value: float | int | Fraction | Decimal) -> Fraction:
+    if isinstance(value, Fraction):
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError(f"Expected finite numeric value, got {value}")
+        return Fraction(value)
+    if isinstance(value, (int, np.integer)):
+        return Fraction(int(value), 1)
+    fval = float(value)
+    if not math.isfinite(fval):
+        raise ValueError(f"Expected finite numeric value, got {value}")
+    return Fraction(str(fval))
+
+
+def _frontier_outer_fraction(tau_f: Fraction, eta_f: Fraction) -> Fraction:
+    """Exact outer radius matching `LabDecideLean.frontierOuterRadius` on permille grids."""
+    tau_pm = tau_f * 1000
+    eta_pm = eta_f * 1000
+    if tau_pm.denominator == 1 and eta_pm.denominator == 1:
+        outer_pm = int(tau_pm) + (int(tau_pm) * int(eta_pm)) // 1000
+        return Fraction(outer_pm, 1000)
+    return tau_f * (Fraction(1, 1) + eta_f)
+
+
+def frontier_outer_radius(tau_radius: float, eta_step: float) -> float:
+    """Compute annular shell outer radius aligned with `LabDecideLean.frontierOuterRadius`."""
+    if tau_radius <= 0.0 or eta_step < 0.0:
+        raise ValueError("tau_radius must be > 0 and eta_step >= 0")
+    tau_f = _to_exact_fraction(tau_radius)
+    eta_f = _to_exact_fraction(eta_step)
+    return float(_frontier_outer_fraction(tau_f, eta_f))
 
 
 def verify_frontier_action(
@@ -65,23 +109,36 @@ def verify_frontier_action(
     micro_vol_cap_ul: float = 10.0,
     is_direct_buy: bool = True,
     used_as_point_prediction: bool = False,
+    parent_certified: bool = True,
 ) -> tuple[bool, str | None]:
-    """Exact runtime mirror of `LabDecideLean.checkFrontierAction`."""
-    if tau_radius <= 0.0 or nn_dist < 0.0:
+    """Exact runtime mirror of `LabDecideLean.checkFrontierAction` and parent certification."""
+    tau_f = _to_exact_fraction(tau_radius)
+    dist_f = _to_exact_fraction(nn_dist)
+    eta_f = _to_exact_fraction(eta_step)
+    max_eta_f = _to_exact_fraction(max_eta)
+    vol_f = _to_exact_fraction(assay_vol_ul)
+    cap_f = _to_exact_fraction(micro_vol_cap_ul)
+
+    if tau_f <= 0 or dist_f < 0:
         raise ValueError("tau_radius must be > 0 and nn_dist >= 0")
 
-    outer_radius = tau_radius * (1.0 + eta_step)
+    if not parent_certified:
+        return False, "parent_support_certified"
+
+    outer_f = _frontier_outer_fraction(tau_f, eta_f)
     if mode == "exploitation":
-        if nn_dist <= tau_radius + 1e-12:
+        if dist_f <= tau_f:
             return True, None
         return False, "exploitation_inside_tau"
 
     if mode == "frontier_calibration":
-        if eta_step > max_eta + 1e-12:
+        if eta_f > max_eta_f:
             return False, "bounded_annular_shell_width"
-        if nn_dist > outer_radius + 1e-12:
+        if dist_f <= tau_f:
+            return False, "strictly_outside_tau_shell"
+        if dist_f > outer_f:
             return False, "within_stepping_stone_shell"
-        if assay_vol_ul > micro_vol_cap_ul + 1e-12:
+        if vol_f > cap_f:
             return False, "frontier_micro_volume_cap"
         if not is_direct_buy:
             return False, "frontier_requires_direct_stock"
@@ -93,19 +150,39 @@ def verify_frontier_action(
 
 
 def _nearest_support_node(
-    query: CandidateCompound, support: Sequence[CandidateCompound]
+    query: CandidateCompound,
+    support: Sequence[CandidateCompound],
+    *,
+    k: int = 1,
 ) -> tuple[CandidateCompound, float]:
+    """Return `(nearest_support_node, kNN_mean_distance)` over certified `support`."""
+    if not support:
+        raise ValueError("support must be non-empty")
     q_arr = np.asarray(query.coords, dtype=np.float64)
-    best_node = support[0]
-    best_dist = float("inf")
-    for s_node in support:
-        dist = float(
-            np.linalg.norm(q_arr - np.asarray(s_node.coords, dtype=np.float64))
-        )
-        if dist < best_dist:
-            best_dist = dist
-            best_node = s_node
-    return best_node, best_dist
+    dists = [
+        float(np.linalg.norm(q_arr - np.asarray(s_node.coords, dtype=np.float64)))
+        for s_node in support
+    ]
+    best_idx = int(np.argmin(dists))
+    k_eff = max(1, min(int(k), len(dists)))
+    if k_eff == 1:
+        return support[best_idx], dists[best_idx]
+    mean_knn = float(np.mean(np.partition(np.asarray(dists, dtype=np.float64), k_eff - 1)[:k_eff]))
+    return support[best_idx], mean_knn
+
+
+def _evaluate_certification_verdict(verdict: Any) -> bool:
+    """Validate boolean or `lab-attrib` ledger mapping certification result."""
+    if isinstance(verdict, bool):
+        return verdict
+    if isinstance(verdict, Mapping):
+        if verdict.get("admit_to_memory") is False:
+            return False
+        sha = verdict.get("ledger_entry_sha256")
+        if sha is not None:
+            return isinstance(sha, str) and bool(_SHA256_HEX_RE.match(sha))
+        return verdict.get("admit_to_memory") is True
+    return False
 
 
 class ChemRRTExplorer:
@@ -120,130 +197,191 @@ class ChemRRTExplorer:
         micro_probe_vol_ul: float = 8.0,
         micro_vol_cap_ul: float = 10.0,
         production_vol_ul: float = 50.0,
+        *,
+        k_neighbors: int = 1,
     ) -> None:
         if not initial_support:
             raise ValueError("initial_support must be non-empty")
         if micro_probe_vol_ul > micro_vol_cap_ul:
             raise ValueError("micro_probe_vol_ul cannot exceed micro_vol_cap_ul")
+        if k_neighbors < 1:
+            raise ValueError("k_neighbors must be >= 1")
         self.support: list[CandidateCompound] = list(initial_support)
         self.support_ids: set[str] = {c.compound_id for c in initial_support}
+        self.pending_probes: dict[str, tuple[CandidateCompound, CandidateCompound, float]] = {}
+        self.pending_probe_ids: set[str] = set()
+        self.quarantined_probe_ids: set[str] = set()
         self.tau_radius = float(tau_radius)
         self.eta_step = float(eta_step)
         self.max_eta = float(max_eta)
         self.micro_probe_vol_ul = float(micro_probe_vol_ul)
         self.micro_vol_cap_ul = float(micro_vol_cap_ul)
         self.production_vol_ul = float(production_vol_ul)
+        self.k_neighbors = int(k_neighbors)
         self.edges: list[TreeEdge] = []
         self.action_log: list[FrontierActionRecord] = []
 
-    def expand_toward_targets(
+    def propose_frontier_step(
         self,
         catalog_pool: Sequence[CandidateCompound],
         novel_targets: Sequence[CandidateCompound],
-        max_probe_budget: int = 40,
-    ) -> list[CandidateCompound]:
-        """Grow micro-scale in-stock RRT branches toward targets, then exploit certified ones."""
-        probes_used = 0
-        outer_shell = self.tau_radius * (1.0 + self.eta_step)
+    ) -> CandidateCompound | None:
+        """Select one annular stepping-stone probe anchored strictly to certified `self.support`.
 
-        while probes_used < max_probe_budget:
-            locked_targets = [
-                t
-                for t in novel_targets
-                if _nearest_support_node(t, self.support)[1] > self.tau_radius + 1e-12
-            ]
-            if not locked_targets:
-                break
+        Places the selected probe into `self.pending_probes` (unassayed) WITHOUT promoting it
+        to `self.support` until `certify_probe()` succeeds.
+        """
+        outer_shell = frontier_outer_radius(self.tau_radius, self.eta_step)
+        tau_f = _to_exact_fraction(self.tau_radius)
 
-            # Select in-stock stepping stone inside annular shell (tau, (1 + eta) * tau]
-            # that maximizes distance reduction toward the closest locked high-ring target.
-            best_probe: CandidateCompound | None = None
-            best_parent: CandidateCompound | None = None
-            best_probe_dist = 0.0
-            best_gain = 1e-9
+        locked_targets = [
+            t
+            for t in novel_targets
+            if _to_exact_fraction(_nearest_support_node(t, self.support, k=self.k_neighbors)[1]) > tau_f
+        ]
+        if not locked_targets:
+            return None
 
-            for cand in catalog_pool:
-                if cand.compound_id in self.support_ids or not cand.is_direct_buy:
-                    continue
-                parent, dist_to_support = _nearest_support_node(cand, self.support)
-                if not (self.tau_radius < dist_to_support <= outer_shell + 1e-12):
-                    continue
+        best_probe: CandidateCompound | None = None
+        best_parent: CandidateCompound | None = None
+        best_probe_dist = 0.0
+        best_gain = 1e-9
 
-                ok, _ = verify_frontier_action(
-                    mode="frontier_calibration",
-                    nn_dist=dist_to_support,
-                    tau_radius=self.tau_radius,
-                    eta_step=self.eta_step,
-                    max_eta=self.max_eta,
-                    assay_vol_ul=self.micro_probe_vol_ul,
-                    micro_vol_cap_ul=self.micro_vol_cap_ul,
-                    is_direct_buy=cand.is_direct_buy,
-                    used_as_point_prediction=False,
-                )
-                if not ok:
-                    continue
-
-                cand_arr = np.asarray(cand.coords, dtype=np.float64)
-                max_progress = 0.0
-                for target in locked_targets:
-                    _, cur_target_dist = _nearest_support_node(target, self.support)
-                    new_target_dist = float(
-                        np.linalg.norm(
-                            np.asarray(target.coords, dtype=np.float64) - cand_arr
-                        )
-                    )
-                    progress = cur_target_dist - new_target_dist
-                    max_progress = max(max_progress, progress)
-
-                if max_progress > best_gain:
-                    best_gain = max_progress
-                    best_probe = cand
-                    best_parent = parent
-                    best_probe_dist = dist_to_support
-
-            if best_probe is None or best_parent is None:
-                break
-
-            ok, rule = verify_frontier_action(
+        excluded_ids = self.support_ids | self.pending_probe_ids | self.quarantined_probe_ids
+        for cand in catalog_pool:
+            if cand.compound_id in excluded_ids or not cand.is_direct_buy:
+                continue
+            parent, dist_to_support = _nearest_support_node(cand, self.support, k=self.k_neighbors)
+            ok, _ = verify_frontier_action(
                 mode="frontier_calibration",
-                nn_dist=best_probe_dist,
+                nn_dist=dist_to_support,
                 tau_radius=self.tau_radius,
                 eta_step=self.eta_step,
                 max_eta=self.max_eta,
                 assay_vol_ul=self.micro_probe_vol_ul,
                 micro_vol_cap_ul=self.micro_vol_cap_ul,
+                is_direct_buy=cand.is_direct_buy,
+                used_as_point_prediction=False,
+                parent_certified=(parent.compound_id in self.support_ids),
+            )
+            if not ok:
+                continue
+
+            cand_arr = np.asarray(cand.coords, dtype=np.float64)
+            max_progress = 0.0
+            for target in locked_targets:
+                _, cur_target_dist = _nearest_support_node(target, self.support, k=self.k_neighbors)
+                hypothetical_support = [*self.support, cand]
+                _, new_target_dist = _nearest_support_node(
+                    target, hypothetical_support, k=self.k_neighbors
+                )
+                # Break kNN ties via direct Euclidean approach toward target
+                euclid_progress = cur_target_dist - float(
+                    np.linalg.norm(np.asarray(target.coords, dtype=np.float64) - cand_arr)
+                )
+                progress = max(cur_target_dist - new_target_dist, euclid_progress)
+                max_progress = max(max_progress, progress)
+
+            if max_progress > best_gain:
+                best_gain = max_progress
+                best_probe = cand
+                best_parent = parent
+                best_probe_dist = dist_to_support
+
+        if best_probe is None or best_parent is None:
+            return None
+
+        ok, rule = verify_frontier_action(
+            mode="frontier_calibration",
+            nn_dist=best_probe_dist,
+            tau_radius=self.tau_radius,
+            eta_step=self.eta_step,
+            max_eta=self.max_eta,
+            assay_vol_ul=self.micro_probe_vol_ul,
+            micro_vol_cap_ul=self.micro_vol_cap_ul,
+            is_direct_buy=best_probe.is_direct_buy,
+            used_as_point_prediction=False,
+            parent_certified=(best_parent.compound_id in self.support_ids),
+        )
+        self.pending_probes[best_probe.compound_id] = (best_probe, best_parent, best_probe_dist)
+        self.pending_probe_ids.add(best_probe.compound_id)
+        self.action_log.append(
+            FrontierActionRecord(
+                compound_id=best_probe.compound_id,
+                mode="frontier_calibration",
+                nn_dist=best_probe_dist,
+                tau_radius=self.tau_radius,
+                outer_shell_radius=outer_shell,
+                assay_vol_ul=self.micro_probe_vol_ul,
                 is_direct_buy=best_probe.is_direct_buy,
                 used_as_point_prediction=False,
+                guard_passed=ok,
+                violation_rule=rule,
+                certified=False,
             )
-            self.action_log.append(
-                FrontierActionRecord(
-                    compound_id=best_probe.compound_id,
-                    mode="frontier_calibration",
-                    nn_dist=best_probe_dist,
-                    tau_radius=self.tau_radius,
-                    outer_shell_radius=outer_shell,
-                    assay_vol_ul=self.micro_probe_vol_ul,
-                    is_direct_buy=best_probe.is_direct_buy,
-                    used_as_point_prediction=False,
-                    guard_passed=ok,
-                    violation_rule=rule,
-                )
-            )
-            self.support.append(best_probe)
-            self.support_ids.add(best_probe.compound_id)
-            self.edges.append(
-                TreeEdge(
-                    parent_id=best_parent.compound_id,
-                    child_id=best_probe.compound_id,
-                    step_distance=best_probe_dist,
-                    assay_vol_ul=self.micro_probe_vol_ul,
-                )
-            )
-            probes_used += 1
+        )
+        return best_probe
 
+    def certify_probe(
+        self,
+        compound_id: str,
+        *,
+        admit_to_memory: bool = True,
+        ledger_entry_sha256: str | None = None,
+    ) -> bool:
+        """Promote a pending frontier probe into calibrated `self.support` after wet-lab certification."""
+        pending = self.pending_probes.pop(compound_id, None)
+        self.pending_probe_ids.discard(compound_id)
+        if pending is None:
+            return False
+        probe, parent, step_dist = pending
+        sha_ok = ledger_entry_sha256 is None or (
+            isinstance(ledger_entry_sha256, str) and bool(_SHA256_HEX_RE.match(ledger_entry_sha256))
+        )
+        if not admit_to_memory or not sha_ok:
+            self.quarantined_probe_ids.add(compound_id)
+            return False
+
+        self.support.append(probe)
+        self.support_ids.add(compound_id)
+        self.edges.append(
+            TreeEdge(
+                parent_id=parent.compound_id,
+                child_id=probe.compound_id,
+                step_distance=step_dist,
+                assay_vol_ul=self.micro_probe_vol_ul,
+                certified=True,
+            )
+        )
+        # Mark matching pending action_log entry as certified
+        for idx in range(len(self.action_log) - 1, -1, -1):
+            rec = self.action_log[idx]
+            if rec.compound_id == compound_id and rec.mode == "frontier_calibration" and not rec.certified:
+                self.action_log[idx] = FrontierActionRecord(
+                    compound_id=rec.compound_id,
+                    mode=rec.mode,
+                    nn_dist=rec.nn_dist,
+                    tau_radius=rec.tau_radius,
+                    outer_shell_radius=rec.outer_shell_radius,
+                    assay_vol_ul=rec.assay_vol_ul,
+                    is_direct_buy=rec.is_direct_buy,
+                    used_as_point_prediction=rec.used_as_point_prediction,
+                    guard_passed=rec.guard_passed,
+                    violation_rule=rec.violation_rule,
+                    certified=True,
+                )
+                break
+        return True
+
+    def exploit_certified_targets(
+        self,
+        novel_targets: Sequence[CandidateCompound],
+    ) -> list[CandidateCompound]:
+        """Run production exploitation strictly against wet-lab certified `self.support`."""
+        outer_shell = frontier_outer_radius(self.tau_radius, self.eta_step)
         unlocked: list[CandidateCompound] = []
         for target in novel_targets:
-            _, dist = _nearest_support_node(target, self.support)
+            parent, dist = _nearest_support_node(target, self.support, k=self.k_neighbors)
             ok, rule = verify_frontier_action(
                 mode="exploitation",
                 nn_dist=dist,
@@ -254,6 +392,7 @@ class ChemRRTExplorer:
                 micro_vol_cap_ul=self.micro_vol_cap_ul,
                 is_direct_buy=target.is_direct_buy,
                 used_as_point_prediction=True,
+                parent_certified=(parent.compound_id in self.support_ids),
             )
             if ok:
                 self.action_log.append(
@@ -268,11 +407,47 @@ class ChemRRTExplorer:
                         used_as_point_prediction=True,
                         guard_passed=True,
                         violation_rule=rule,
+                        certified=True,
                     )
                 )
                 unlocked.append(target)
-
         return unlocked
+
+    def expand_toward_targets(
+        self,
+        catalog_pool: Sequence[CandidateCompound],
+        novel_targets: Sequence[CandidateCompound],
+        max_probe_budget: int = 40,
+        *,
+        certify_probe_fn: Callable[[CandidateCompound], bool | Mapping[str, Any]] | None = None,
+        require_certification: bool = False,
+    ) -> list[CandidateCompound]:
+        """Grow micro-scale in-stock RRT branches toward targets, promoting only certified probes."""
+        probes_used = 0
+        while probes_used < max_probe_budget:
+            probe = self.propose_frontier_step(catalog_pool, novel_targets)
+            if probe is None:
+                break
+            probes_used += 1
+
+            if certify_probe_fn is not None:
+                verdict = certify_probe_fn(probe)
+                if isinstance(verdict, Mapping):
+                    self.certify_probe(
+                        probe.compound_id,
+                        admit_to_memory=(verdict.get("admit_to_memory") is not False),
+                        ledger_entry_sha256=verdict.get("ledger_entry_sha256"),
+                    )
+                else:
+                    self.certify_probe(
+                        probe.compound_id,
+                        admit_to_memory=_evaluate_certification_verdict(verdict),
+                    )
+            elif not require_certification:
+                # Simulated closed-loop wet-lab assay completion in standalone benchmark mode
+                self.certify_probe(probe.compound_id, admit_to_memory=True)
+
+        return self.exploit_certified_targets(novel_targets)
 
 
 def run_benchmark(seed: int = 42) -> dict[str, object]:
@@ -351,7 +526,7 @@ def run_benchmark(seed: int = 42) -> dict[str, object]:
     static_unlocked = sum(
         1
         for t in novel_targets
-        if _nearest_support_node(t, initial_support)[1] <= tau_radius + 1e-12
+        if _nearest_support_node(t, initial_support)[1] <= tau_radius
     )
 
     # Policy 2: Unbounded Leap (directly executes 50 uL production runs on all deep-OOD targets)

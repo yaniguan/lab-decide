@@ -2,19 +2,24 @@
 # LabDecideLean: Formal L6 Conformal Calibration & Stepped Frontier Trust Regime
 
 Self-contained Lean 4 (`v4.36.0`) formalization for `lab-decide` (`L6`), synchronized
-with the central 14-repository Auto-Lab Trust Regime (`AutoLabLean`):
+with the central 15-repository Auto-Lab Trust Regime (`AutoLabLean`):
 
 1. **Finite-Sample Split Conformal Calibration & kNN Trust Boundary (`ConformalQuery`, `checkDecide`)**:
    - Exact finite-sample order-statistic rank:
      `conformalRank n alphaPermille = ceil((n + 1) * (1000 - alphaPermille) / 1000)`.
+   - Proves exact ceiling Sandwich bounds (`conformalRank_exact_lower`, `conformalRank_exact_upper`)
+     ruling out floating-point rank drift.
    - Never silently clamps `k > n`: undersized calibration sets MUST abstain (`undersized_calib_always_abstains`).
    - Never extrapolates outside the calibrated kNN support (`out_of_domain_always_abstains`).
    - Enforces ordered intervals within physical solubility bounds `[physMinMilli, physMaxMilli]`.
 2. **Stepped Annular Frontier Calibration (`FrontierProbeSpec`, `checkFrontierAction`)**:
-   - Resolves the exploration-vs-safety paradox by allowing micro-volume (`<= 10.0 uL`),
-     zero-synthesis (`isDirectBuy = true`), calibration-only stepping-stone probes
-     inside an annular frontier shell `tau < d(x) <= (1 + eta) * tau` while blocking
-     all deep-OOD leaps (`deep_ood_always_blocked`, `accepted_outside_tau_is_bounded_probe`).
+   - Enforces both lower and upper annular shell bounds `tau < d(x) <= frontierOuterRadius tau eta`,
+     micro-volume cap (`<= 10.0 uL`), direct-stock requirement (`isDirectBuy = true`), and
+     calibration-only status (`usedAsPointPrediction = false`).
+3. **Certified-Support Chaining (`SupportChainHop`, `checkSupportHop`, `checkCertifiedChain`)**:
+   - Proves that multi-hop `Chem-RRT` branches cannot chain unassayed or quarantined probes
+     (`unassayed_probe_blocks_chaining`, `unassayed_hop_blocks_chain`), and bounds total branch
+     reach by `k * frontierOuterRadius tau eta` (`certified_chain_annular_span`).
 -/
 namespace LabDecideLean
 
@@ -136,6 +141,19 @@ theorem conformalRank_pos (n alphaPermille : Nat) (ha : alphaPermille < 1000) :
     Nat.mul_pos (Nat.succ_pos n) (by omega)
   omega
 
+/-- Exact ceiling lower bound: `conformalRank` never under-covers below `(n + 1) * (1 - alpha)`. -/
+theorem conformalRank_exact_lower (n alphaPermille : Nat) :
+    (n + 1) * (1000 - alphaPermille) ≤ 1000 * conformalRank n alphaPermille := by
+  unfold conformalRank
+  omega
+
+/-- Exact ceiling minimality: `conformalRank - 1` is strictly below `(n + 1) * (1 - alpha)`. -/
+theorem conformalRank_exact_upper (n alphaPermille : Nat) (ha : alphaPermille < 1000) :
+    1000 * (conformalRank n alphaPermille - 1) < (n + 1) * (1000 - alphaPermille) := by
+  have hpos : 1 ≤ conformalRank n alphaPermille := conformalRank_pos n alphaPermille ha
+  unfold conformalRank at hpos ⊢
+  omega
+
 /-- Accepted conformal intervals always lie ordered within `[physMinMilli, physMaxMilli]`. -/
 theorem physical_bounds_respected (q : ConformalQuery)
     (hok : checkDecide q = none) :
@@ -184,6 +202,9 @@ def checkFrontierAction (p : FrontierProbeSpec) : Option RegimeViolation :=
       [ (decide (p.etaStepPermille ≤ p.maxEtaPermille),
           { repo := "lab-decide", rule := "bounded_annular_shell_width",
             detail := "frontier stepping-stone expansion ratio eta exceeds safe shell cap" }),
+        (decide (p.tauPermille < p.knnDistPermille),
+          { repo := "lab-decide", rule := "strictly_outside_tau_shell",
+            detail := "frontier calibration probe must lie strictly outside current calibrated radius tau" }),
         (decide (p.knnDistPermille ≤ frontierOuterRadius p.tauPermille p.etaStepPermille),
           { repo := "lab-decide", rule := "within_stepping_stone_shell",
             detail := "candidate lies in deep OOD beyond the (1 + eta) * tau stepping-stone shell" }),
@@ -196,6 +217,28 @@ def checkFrontierAction (p : FrontierProbeSpec) : Option RegimeViolation :=
         (!p.usedAsPointPrediction,
           { repo := "lab-decide", rule := "frontier_calibration_only",
             detail := "frontier probe cannot be consumed as a calibrated point prediction prior to assay" }) ]
+
+/-- Interior candidates (`knnDist <= tau`) cannot be misclassified as frontier stepping stones. -/
+theorem interior_rejected_as_frontier_probe (p : FrontierProbeSpec)
+    (hm : p.mode = .frontierCalibration)
+    (hin : p.knnDistPermille ≤ p.tauPermille) :
+    checkFrontierAction p ≠ none := by
+  intro hok
+  simp only [checkFrontierAction, hm, firstViolation_cons, firstViolation_nil,
+             and_true, decide_eq_true_eq] at hok
+  rcases hok with ⟨_, hlow, _, _, _, _⟩
+  omega
+
+/-- Accepted frontier calibration probes lie strictly inside `(tau, frontierOuterRadius tau eta]`. -/
+theorem frontier_calibration_strictly_annular (p : FrontierProbeSpec)
+    (hm : p.mode = .frontierCalibration)
+    (hok : checkFrontierAction p = none) :
+    p.tauPermille < p.knnDistPermille ∧
+    p.knnDistPermille ≤ frontierOuterRadius p.tauPermille p.etaStepPermille := by
+  simp only [checkFrontierAction, hm, firstViolation_cons, firstViolation_nil,
+             and_true, decide_eq_true_eq] at hok
+  rcases hok with ⟨_, hlow, hhigh, _, _, _⟩
+  exact ⟨hlow, hhigh⟩
 
 /-- Deep OOD candidates beyond `(1 + eta) * tau` are blocked in ALL campaign modes. -/
 theorem deep_ood_always_blocked (p : FrontierProbeSpec)
@@ -211,7 +254,7 @@ theorem deep_ood_always_blocked (p : FrontierProbeSpec)
   | frontierCalibration =>
     simp only [checkFrontierAction, hm, firstViolation_cons, firstViolation_nil,
                and_true, decide_eq_true_eq] at hok
-    rcases hok with ⟨_, hshell, _, _, _⟩
+    rcases hok with ⟨_, _, hshell, _, _, _⟩
     omega
 
 /-- Any candidate accepted outside `tau` is provably a micro-scale, direct-buy calibration probe. -/
@@ -231,10 +274,171 @@ theorem accepted_outside_tau_is_bounded_probe (p : FrontierProbeSpec)
   | frontierCalibration =>
     simp only [checkFrontierAction, hm, firstViolation_cons, firstViolation_nil,
                and_true, decide_eq_true_eq, Bool.not_eq_true'] at hok
-    rcases hok with ⟨_, hshell, hvol, hbuy, hcal⟩
+    rcases hok with ⟨_, _, hshell, hvol, hbuy, hcal⟩
     exact ⟨rfl, hshell, hvol, hbuy, hcal⟩
 
-/-! ## 3. Compile-Time `#guard` Witnesses -/
+/-! ## 3. Multi-Hop `Chem-RRT` Certified-Support Chaining -/
+
+/-- Directed stepping-stone hop requiring wet-lab certification on both parent and probe. -/
+structure SupportChainHop where
+  probe           : FrontierProbeSpec
+  parentCertified : Bool
+  probeCertified  : Bool
+  deriving DecidableEq, Repr
+
+/-- Validate one stepping-stone hop before promoting `probe` into calibrated support `S_{t+1}`. -/
+def checkSupportHop (h : SupportChainHop) : Option RegimeViolation :=
+  match checkFrontierAction h.probe with
+  | some v => some v
+  | none =>
+    firstViolation
+      [ (h.parentCertified,
+          { repo := "lab-attrib", rule := "parent_support_certified",
+            detail := "stepping-stone parent node lacks certified wet-lab support" }),
+        (decide (h.probe.mode = .frontierCalibration),
+          { repo := "lab-decide", rule := "chain_hop_is_frontier_probe",
+            detail := "support-expansion hop must execute in frontierCalibration mode" }),
+        (h.probeCertified,
+          { repo := "lab-attrib", rule := "probe_wetlab_certified_before_chaining",
+            detail := "unassayed or quarantined probe cannot be promoted into calibrated support" }) ]
+
+/-- Validate an entire multi-hop `Chem-RRT` stepping-stone branch. -/
+def checkCertifiedChain : List SupportChainHop → Option RegimeViolation
+  | [] => none
+  | hd :: tl =>
+    match checkSupportHop hd with
+    | some v => some v
+    | none => checkCertifiedChain tl
+
+/-- Total cumulative stepping-stone distance (permille) traversed along a branch. -/
+def chainTotalSpan : List SupportChainHop → Nat
+  | [] => 0
+  | hd :: tl => hd.probe.knnDistPermille + chainTotalSpan tl
+
+@[simp] theorem checkSupportHop_ok_iff (h : SupportChainHop) :
+    checkSupportHop h = none ↔
+      checkFrontierAction h.probe = none ∧
+      h.parentCertified = true ∧
+      h.probe.mode = .frontierCalibration ∧
+      h.probeCertified = true := by
+  unfold checkSupportHop
+  cases hfa : checkFrontierAction h.probe with
+  | some v => simp
+  | none =>
+    simp [firstViolation_cons, firstViolation_nil, decide_eq_true_eq]
+
+@[simp] theorem checkCertifiedChain_nil : checkCertifiedChain [] = none := rfl
+
+@[simp] theorem checkCertifiedChain_cons (hd : SupportChainHop) (tl : List SupportChainHop) :
+    checkCertifiedChain (hd :: tl) = none ↔
+      checkSupportHop hd = none ∧ checkCertifiedChain tl = none := by
+  cases hh : checkSupportHop hd <;> simp [checkCertifiedChain, hh]
+
+/-- Unassayed or quarantined stepping-stone probes (`probeCertified = false`) can never be chained. -/
+theorem unassayed_probe_blocks_chaining (h : SupportChainHop)
+    (hun : h.probeCertified = false) :
+    checkSupportHop h ≠ none := by
+  intro hok
+  have hc := ((checkSupportHop_ok_iff h).mp hok).2.2.2
+  rw [hun] at hc
+  contradiction
+
+/-- Any multi-hop chain containing an unassayed probe is rejected. -/
+theorem unassayed_hop_blocks_chain (chain : List SupportChainHop)
+    (h : SupportChainHop) (hmem : h ∈ chain) (hun : h.probeCertified = false) :
+    checkCertifiedChain chain ≠ none := by
+  induction chain with
+  | nil => cases hmem
+  | cons hd tl ih =>
+    intro hok
+    rcases (checkCertifiedChain_cons hd tl).mp hok with ⟨hhd, htl⟩
+    rcases List.mem_cons.mp hmem with heq | htl_mem
+    · rw [heq] at hun
+      exact unassayed_probe_blocks_chaining hd hun hhd
+    · exact ih htl_mem htl
+
+/-- Every accepted support-chain hop satisfies strict annular bounds, micro-volume cap, and certification. -/
+theorem certified_hop_annular_bounds (h : SupportChainHop)
+    (hok : checkSupportHop h = none) :
+    h.parentCertified = true ∧
+    h.probeCertified = true ∧
+    h.probe.tauPermille < h.probe.knnDistPermille ∧
+    h.probe.knnDistPermille ≤ frontierOuterRadius h.probe.tauPermille h.probe.etaStepPermille ∧
+    h.probe.assayVolTenthUL ≤ h.probe.microVolCapTenthUL ∧
+    h.probe.isDirectBuy = true ∧
+    h.probe.usedAsPointPrediction = false := by
+  rcases (checkSupportHop_ok_iff h).mp hok with ⟨hfa, hp, hm, hc⟩
+  rcases frontier_calibration_strictly_annular h.probe hm hfa with ⟨hlow, hhigh⟩
+  rcases accepted_outside_tau_is_bounded_probe h.probe hlow hfa with ⟨_, _, hvol, hbuy, hcal⟩
+  exact ⟨hp, hc, hlow, hhigh, hvol, hbuy, hcal⟩
+
+/-- Telescoping annular span theorem: a certified `k`-hop branch with parameters `(tau, eta)`
+    advances strictly more than `k * tau` and at most `k * frontierOuterRadius tau eta`. -/
+theorem certified_chain_annular_span (chain : List SupportChainHop) (tau eta : Nat)
+    (hok : checkCertifiedChain chain = none)
+    (hcfg : ∀ h ∈ chain, h.probe.tauPermille = tau ∧ h.probe.etaStepPermille = eta) :
+    chain.length * tau + chain.length ≤ chainTotalSpan chain ∧
+    chainTotalSpan chain ≤ chain.length * frontierOuterRadius tau eta := by
+  induction chain with
+  | nil => simp [chainTotalSpan]
+  | cons hd tl ih =>
+    rcases (checkCertifiedChain_cons hd tl).mp hok with ⟨hhd, htl⟩
+    have hhd_cfg := hcfg hd List.mem_cons_self
+    have htl_cfg : ∀ h ∈ tl, h.probe.tauPermille = tau ∧ h.probe.etaStepPermille = eta :=
+      fun h hm => hcfg h (List.mem_cons_of_mem hd hm)
+    rcases ih htl htl_cfg with ⟨ih_lo, ih_hi⟩
+    rcases certified_hop_annular_bounds hd hhd with ⟨_, _, hlow, hhigh, _, _, _⟩
+    rw [hhd_cfg.1] at hlow
+    rw [hhd_cfg.1, hhd_cfg.2] at hhigh
+    simp only [List.length_cons, chainTotalSpan]
+    have hmul_lo : (tl.length + 1) * tau = tl.length * tau + tau := Nat.succ_mul tl.length tau
+    have hmul_hi : (tl.length + 1) * frontierOuterRadius tau eta =
+        tl.length * frontierOuterRadius tau eta + frontierOuterRadius tau eta :=
+      Nat.succ_mul tl.length (frontierOuterRadius tau eta)
+    omega
+
+/-- Gate a production exploitation run behind a certified `Chem-RRT` branch. -/
+def checkExploitAfterChain (chain : List SupportChainHop) (exploit : FrontierProbeSpec)
+    (anchorCertified : Bool) : Option RegimeViolation :=
+  match checkCertifiedChain chain with
+  | some v => some v
+  | none =>
+    if !anchorCertified then
+      some { repo := "lab-attrib", rule := "parent_support_certified",
+             detail := "exploitation support anchor is not wet-lab certified" }
+    else if exploit.mode != .exploitation then
+      some { repo := "lab-decide", rule := "terminal_action_is_exploitation",
+             detail := "terminal target run must execute in exploitation mode" }
+    else
+      checkFrontierAction exploit
+
+theorem exploitation_after_chain_sound (chain : List SupportChainHop)
+    (exploit : FrontierProbeSpec) (anchorCertified : Bool)
+    (hok : checkExploitAfterChain chain exploit anchorCertified = none) :
+    checkCertifiedChain chain = none ∧
+    anchorCertified = true ∧
+    exploit.mode = .exploitation ∧
+    exploit.knnDistPermille ≤ exploit.tauPermille := by
+  unfold checkExploitAfterChain at hok
+  cases hc : checkCertifiedChain chain with
+  | some v => simp [hc] at hok
+  | none =>
+    simp only [hc] at hok
+    cases ha : anchorCertified with
+    | false => simp [ha] at hok
+    | true =>
+      simp only [ha, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hok
+      cases hm : exploit.mode with
+      | frontierCalibration => simp [hm] at hok
+      | exploitation =>
+        simp only [hm, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte,
+                   checkFrontierAction, firstViolation_cons, firstViolation_nil,
+                   and_true, decide_eq_true_eq] at hok
+        exact ⟨rfl, rfl, rfl, hok⟩
+
+/-! ## 4. Compile-Time `#guard` Witnesses -/
+
+#guard conformalRank 149 180 == 123
 
 #guard (checkDecide
          { nCalib := 180, alphaPermille := 100, knnDistPermille := 410,
@@ -260,6 +464,13 @@ theorem accepted_outside_tau_is_bounded_probe (p : FrontierProbeSpec)
            microVolCapTenthUL := 100, isDirectBuy := true,
            usedAsPointPrediction := false }).isNone == true
 
+-- Interior point (`knnDist = 500 <= 758`) rejected as frontier stepping-stone probe -> BLOCKED
+#guard (checkFrontierAction
+         { mode := .frontierCalibration, knnDistPermille := 500, tauPermille := 758,
+           etaStepPermille := 250, maxEtaPermille := 350, assayVolTenthUL := 80,
+           microVolCapTenthUL := 100, isDirectBuy := true,
+           usedAsPointPrediction := false }).isSome == true
+
 -- Deep OOD leap (`1400 > 947`) -> BLOCKED
 #guard (checkFrontierAction
          { mode := .frontierCalibration, knnDistPermille := 1400, tauPermille := 758,
@@ -273,5 +484,34 @@ theorem accepted_outside_tau_is_bounded_probe (p : FrontierProbeSpec)
            etaStepPermille := 250, maxEtaPermille := 350, assayVolTenthUL := 250,
            microVolCapTenthUL := 100, isDirectBuy := true,
            usedAsPointPrediction := false }).isSome == true
+
+-- Unassayed probe (`probeCertified := false`) in multi-hop chain -> BLOCKED
+#guard (checkCertifiedChain
+         [ { probe := { mode := .frontierCalibration, knnDistPermille := 900, tauPermille := 758,
+                        etaStepPermille := 250, maxEtaPermille := 350, assayVolTenthUL := 80,
+                        microVolCapTenthUL := 100, isDirectBuy := true,
+                        usedAsPointPrediction := false },
+             parentCertified := true,
+             probeCertified := false } ]).isSome == true
+
+-- Certified 2-hop chain followed by inside-tau exploitation -> OK
+#guard (checkExploitAfterChain
+         [ { probe := { mode := .frontierCalibration, knnDistPermille := 900, tauPermille := 758,
+                        etaStepPermille := 250, maxEtaPermille := 350, assayVolTenthUL := 80,
+                        microVolCapTenthUL := 100, isDirectBuy := true,
+                        usedAsPointPrediction := false },
+             parentCertified := true,
+             probeCertified := true },
+           { probe := { mode := .frontierCalibration, knnDistPermille := 920, tauPermille := 758,
+                        etaStepPermille := 250, maxEtaPermille := 350, assayVolTenthUL := 80,
+                        microVolCapTenthUL := 100, isDirectBuy := true,
+                        usedAsPointPrediction := false },
+             parentCertified := true,
+             probeCertified := true } ]
+         { mode := .exploitation, knnDistPermille := 680, tauPermille := 758,
+           etaStepPermille := 250, maxEtaPermille := 350, assayVolTenthUL := 500,
+           microVolCapTenthUL := 100, isDirectBuy := false,
+           usedAsPointPrediction := true }
+         true).isNone == true
 
 end LabDecideLean

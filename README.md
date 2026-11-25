@@ -20,10 +20,10 @@ Epistemic experiment advisor and uncertainty-aware decision layer (`L6`) that de
 - **Curated Catalog**: Indexes `5` reaction/experiment optimization benchmarks (`ESOL`, `EDBO`, `EDBO+`, `rxn_yields`, `Olympus`), `12` open-source BO & conformal libraries (`BoTorch`, `Ax`, `MAPIE`, `BayBE`, `TuRBO`, `SafeOpt`, `Summit`, `Gryffin`), and `12` foundational & 2024–2026 papers.
 
 ### Model
-Huber `GradientBoostingRegressor(loss="huber", random_state=0)` paired with finite-sample Mondrian / selective Split Conformal Prediction ($\alpha = 0.10$, exact order-statistic level $\lceil(n_{\text{cal,in}}+1)(1-\alpha)\rceil / n_{\text{cal,in}}$ returning $\infty$ without clamping when $n < (1-\alpha)/\alpha$), locally adaptive distance-normalized & CQR intervals, domain-bound clipping, importance-weighted standardized `NearestNeighbors` applicability-domain gating (finite-sample conformal outlier threshold $\hat{\tau}$), RDKit SMILES-to-descriptor bridging, and `TrustRegionAdvisor` constrained Bayesian optimization (`conformal_ucb`, `conformal_ei`, `safe_expand`).
+Huber `GradientBoostingRegressor(loss="huber", random_state=0)` paired with finite-sample Mondrian / selective Split Conformal Prediction ($\alpha = 0.10$, exact rational order-statistic rank $\lceil(n_{\text{cal,in}}+1)(1-\alpha)\rceil$ aligned with `LabDecideLean.conformalRank`, returning $\infty$ without clamping when $n < (1-\alpha)/\alpha$), Tibshirani-Foygel-Barber likelihood-ratio weighted calibration under active boundary covariate shift, locally scaled Conformalized Quantile Regression (`cqr_r`) with monotonic `lo <= hi` crossing guards, domain-bound clipping, zero-variance OOD invariant guarding on standardized `NearestNeighbors` applicability-domain gating, RDKit SMILES-to-descriptor bridging, and `TrustRegionAdvisor` constrained Bayesian optimization (`conformal_ucb`, `conformal_ei`, `safe_expand`).
 
 ### Training
-CPU-only fitting, Mondrian conformal calibration, and 3-round active expansion across a **4-way disjoint split** (`train 561 / pool 224 / calibration 169 / test 169` on `1,123` deduplicated ESOL compounds). On the frozen test set (`n = 169`), selective Mondrian conformal achieves **`0.936` inside coverage** (`MAE 0.640`, adaptive width `3.066`, `n = 141` answered) vs **`1.217` MAE outside** (`width 3.836`, `n = 28` abstained), and diverse boundary acquisition from `pool` tightens `width_in` (`3.066 -> 2.721`) while maintaining `>= 0.910` coverage on the untouched test set.
+CPU-only fitting, Mondrian conformal calibration, and active boundary expansion across a **4-way disjoint split** (`train 561 / pool 224 / calibration 169 / test 169` on `1,123` deduplicated ESOL compounds). On the frozen test set (`n = 169`), selective Mondrian conformal achieves **`0.936` inside coverage** (`MAE 0.640`, adaptive width `3.066`, `n = 141` answered) vs **`1.217` MAE outside** (`width 3.836`, `n = 28` abstained), and likelihood-ratio reweighted diverse boundary acquisition from `pool` tightens `width_in` (`3.066 -> 2.880`) while preserving **`0.931` inside / `0.917` marginal coverage** on the untouched test set.
 
 ### History
 Initialized in `41dae77` (`2026-11-18`) with `demo/conformal_trust.py`, reference output (`demo/output.txt`), Python 3.12 CI workflow (`.github/workflows/demo.yml`), and curated Bayesian optimization & conformal prediction resources (`2012`–`2026`).
@@ -31,7 +31,16 @@ Initialized in `41dae77` (`2026-11-18`) with `demo/conformal_trust.py`, referenc
 ### Unique Properties
 - **Decoupled Interval Calibration & Abstention**: Separates finite-sample conformal interval calibration ($\hat{q}$) from $k$-NN applicability-domain gating ($d_{\text{5-NN}}(x) \le \tau$) without relying on Gaussian homoscedastic assumptions.
 - **Methodological Transparency**: Explicitly highlights pool-shrinking artifacts (`180` $\rightarrow$ `176` answered test points across active acquisition rounds) rather than overclaiming OOD generalization.
-- **Ecosystem Interfaces**: Pairs at `L6` with [`lab-ask-why`](https://github.com/yaniguan/lab-ask-why) (Socratic claim/rationale probing), aligns upstream with [`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain) (`L3` support-gated `CALiSol-23` & `ScalarObservableTemplate`), [`WignerFlow`](https://github.com/yaniguan/WignerFlow), and [`assayfold`](https://github.com/yaniguan/assayfold), and gates downstream campaigns in [`labshift`](https://github.com/yaniguan/labshift), [`buy-or-make`](https://github.com/yaniguan/buy-or-make) (`L5`), [`lab-rehearsal`](https://github.com/yaniguan/lab-rehearsal), and [`lab-verify`](https://github.com/yaniguan/lab-verify) (`L4`).
+- **Ecosystem Interfaces**: Pairs at `L6` with [`lab-ask-why`](https://github.com/yaniguan/lab-ask-why) (Socratic claim/rationale probing), aligns upstream with [`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain) (`L3` support-gated `CALiSol-23` & `ScalarObservableTemplate`), [`lab-attrib`](https://github.com/yaniguan/lab-attrib) (`L4` post-execution causal blame & SHA-256 certified ledger), [`WignerFlow`](https://github.com/yaniguan/WignerFlow), and [`assayfold`](https://github.com/yaniguan/assayfold), and gates downstream campaigns in [`buy-or-make`](https://github.com/yaniguan/buy-or-make), [`labshift`](https://github.com/yaniguan/labshift) (`L5`), [`lab-rehearsal`](https://github.com/yaniguan/lab-rehearsal), and [`lab-verify`](https://github.com/yaniguan/lab-verify) (`L4`).
+
+## 15-Repository Auto-Lab Wire Contract (autolab-wire/v1)
+
+`autolab_wire.py` exposes `process_packet(packet: dict) -> dict` (`REPO_ID = "lab-decide"`, `LAYER = "L6"`) for the 15-repository [Auto-Lab](https://github.com/yaniguan/auto-lab) execution and learning loop:
+
+- **Upstream (`L6` Epistemic Brain)**: Consumes candidate chemistry (`candidate_smiles`) and falsifiable protocol probes emitted by [`lab-ask-why`](https://github.com/yaniguan/lab-ask-why).
+- **Lean-Verified Conformal Decision Gate (`LabDecideLean`)**: Checks both exact finite-sample split-conformal calibration rank (`ceil((n + 1) * (1 - alpha)) <= effective_n_calib`, never clamping undersized buckets) and applicability-domain distance (`knn_distance <= effective_threshold`). Violation of either invariant sets `halted = True` and `halt_reason = "L6_ABSTAIN"` (`invariant = "out_of_domain_always_abstains"`).
+- **Downstream (`L5` Make-vs-Buy Triage)**: Populates `packet["decision"]` (`in_trust_region`, `abstain`, `knn_distance`, `effective_threshold`, `effective_n_calib`, `conformal_interval`) for [`buy-or-make`](https://github.com/yaniguan/buy-or-make) before multi-instrument scheduling (`labshift`), 96-well rehearsal (`lab-rehearsal`), and physical verification (`lab-verify`).
+- **Closed-Loop Boundary Recalibration (`L4` & `L3`)**: Ingests deduplicated 64-hex SHA-256 `certified_ledger_entries` from [`lab-attrib`](https://github.com/yaniguan/lab-attrib) (verified free of robotic dispense errors and unreacted precursor ghost peaks) with likelihood-ratio covariate weighting and descriptor-conditioned `CQR-r` intervals alongside calibrated `L6_ABSTAIN` / RLVR updates from [`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain), growing `effective_n_calib` and expanding `effective_threshold` (`+0.02` per unique certified entry up to a bounded cap) without admitting quarantined or replayed runs.
 
 ## Repository Layout
 
@@ -39,15 +48,21 @@ Initialized in `41dae77` (`2026-11-18`) with `demo/conformal_trust.py`, referenc
 lab-decide/
 ├── .github/workflows/
 │   └── demo.yml                      # CI: cache ESOL CSV, run offline pytest, verify output within +-0.005
+├── community_extensions/             # Mondrian-ACI drift calibrator & stepped annular Chem-RRT explorer
 ├── demo/
 │   ├── calisol_conformal.py          # CALiSol-23 publication-DOI conformal & kernel-support benchmark
 │   ├── conformal_trust.py            # Mondrian conformal + 4-way split expansion + constrained BO demo
 │   └── output.txt                    # Deterministic reference stdout capture on ESOL (CPU)
 ├── docs/
 │   └── ARCHITECTURE_AND_HISTORY.md   # Deep technical profile (Object, Data, Model, Training, History)
+├── lean/
+│   └── LabDecideLean.lean            # Lean 4 formalization of finite-sample conformal & frontier guards
 ├── src/lab_decide/                   # Installable package (ConformalTrustModel, TrustRegionAdvisor, RDKit, DecisionEnvelope)
 ├── tests/
+│   ├── test_autolab_wire.py          # autolab-wire/v1 contract & closed-loop recalibration tests
+│   ├── test_community_extensions.py  # Mondrian-ACI & Chem-RRT unit and benchmark tests
 │   └── test_conformal_trust.py       # Offline pytest regression suite (#1..#22)
+├── autolab_wire.py                   # L6 Auto-Lab 15-repository wire node (process_packet)
 ├── .gitignore                        # Excludes downloaded ESOL data/ & caches
 ├── LICENSE                           # MIT License (code)
 ├── pyproject.toml                    # Package metadata & `lab-decide` CLI console script
@@ -85,8 +100,7 @@ API answers 0.834 of frozen test points, abstains on 0.166
 round  train  pool  test  n_in n_out  answered  cov_in  cov_out  cov_all  MAE_in  MAE_out width_in
 0        561   224   169   141    28     0.834   0.936    0.821    0.917   0.640    1.217    3.066
 1        577   204   169   143    26     0.846   0.930    0.808    0.911   0.629    1.177    2.798
-2        587   191   169   144    25     0.852   0.917    0.840    0.905   0.645    1.242    2.708
-3        589   189   169   144    25     0.852   0.910    0.840    0.899   0.641    1.223    2.721
+2        588   190   169   144    25     0.852   0.931    0.840    0.917   0.650    1.270    2.880
 
 == Trust-region constrained BO (conformal UCB top-10 on pool) ==
 Constrained top logS: 1.580 (pred MAE 0.514) | Unconstrained greedy pred MAE: 0.651 (OOD frac 0.200)

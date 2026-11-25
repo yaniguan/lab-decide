@@ -30,11 +30,14 @@ from lab_decide.chemistry import (
 )
 from lab_decide.conformal import (
     ConformalTrustModel,
+    compute_covariate_shift_weights,
     conformal_quantile,
+    conformal_rank,
     conformal_threshold,
     fit_and_calibrate,
     summarize,
     weighted_conformal_quantile,
+    winkler_interval_score,
 )
 from lab_decide.data import (
     DEFAULT_DATA_PATH,
@@ -78,8 +81,10 @@ __all__ = [
     "assign_calisol_doi_split",
     "benchmark_trust_region_bo",
     "build_decision_envelopes",
+    "compute_covariate_shift_weights",
     "compute_scaffold_groups",
     "conformal_quantile",
+    "conformal_rank",
     "conformal_threshold",
     "download_file_atomic",
     "ensure_esol_csv",
@@ -105,4 +110,5 @@ __all__ = [
     "summarize",
     "validate_and_clean_dataframe",
     "weighted_conformal_quantile",
+    "winkler_interval_score",
 ]

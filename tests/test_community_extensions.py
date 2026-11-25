@@ -179,3 +179,92 @@ def test_chem_rrt_benchmark_metrics() -> None:
     assert leap_m["uncalibrated_ood_leaps"] == 12
     assert rrt_m["novel_scaffolds_unlocked"] == 12
     assert rrt_m["uncalibrated_ood_leaps"] == 0
+
+
+def test_issue_25_mondrian_aci_cold_start_freezes_alpha_on_abstained_steps() -> None:
+    aci = ScaffoldMondrianACI({"rare_scaf": [0.25, 0.30]}, alpha_target=0.10, gamma=0.10)
+    # Across n_calib_bucket = 2..8, predictions abstain and alpha_t MUST stay frozen at 0.10
+    for expected_n in range(2, 9):
+        pred = aci.predict(-3.0, "rare_scaf")
+        assert pred.n_calib_bucket == expected_n
+        assert pred.abstained is True
+        assert pred.alpha_used == pytest.approx(0.10, abs=1e-12)
+        updated_alpha = aci.update(pred, y_true=-2.6)
+        assert updated_alpha == pytest.approx(0.10, abs=1e-12)
+
+    # Only once n_calib_bucket reaches 9 (ceil(10 * 0.90) = 9 <= 9) does the bucket unlock
+    unlocked = aci.predict(-3.0, "rare_scaf")
+    assert unlocked.n_calib_bucket == 9
+    assert unlocked.abstained is False
+    assert unlocked.alpha_used == pytest.approx(0.10, abs=1e-12)
+
+    # Hierarchical global-pool fallback rescues cold-start scaffold buckets when enabled
+    aci_pooled = ScaffoldMondrianACI(
+        {"common": [0.1 * i for i in range(1, 21)], "novel": [0.15, 0.22]},
+        alpha_target=0.10,
+        hierarchical_fallback=True,
+    )
+    pooled_pred = aci_pooled.predict(-3.0, "novel")
+    assert pooled_pred.abstained is False
+    assert pooled_pred.pooled_fallback is True
+    assert pooled_pred.width < 10.0
+
+
+def test_issue_27_annular_shell_lower_bound_permille_outer_radius_and_certified_chaining() -> None:
+    # Interior candidates (nn_dist <= tau) must be rejected as frontier stepping stones
+    assert verify_frontier_action(
+        mode="frontier_calibration", nn_dist=0.10, tau_radius=0.80
+    ) == (False, "strictly_outside_tau_shell")
+    assert verify_frontier_action(
+        mode="frontier_calibration", nn_dist=0.80, tau_radius=0.80
+    ) == (False, "strictly_outside_tau_shell")
+
+    # Exact permille outer-shell parity with LabDecideLean.frontierOuterRadius 758 250 == 947
+    assert verify_frontier_action(
+        mode="frontier_calibration", nn_dist=0.947, tau_radius=0.758, eta_step=0.25
+    ) == (True, None)
+    assert verify_frontier_action(
+        mode="frontier_calibration", nn_dist=0.9475, tau_radius=0.758, eta_step=0.25
+    ) == (False, "within_stepping_stone_shell")
+
+    # Unassayed stepping-stone probes must NOT chain or unlock exploitation before certification
+    origin = CandidateCompound("S0", "core", (0.0, 0.0), 1, is_direct_buy=True)
+    hop1 = CandidateCompound("HOP1", "b1", (0.95, 0.0), 2, is_direct_buy=True)
+    hop2 = CandidateCompound("HOP2", "b2", (1.90, 0.0), 3, is_direct_buy=True)
+    target = CandidateCompound("TARGET_DEEP", "macro", (2.60, 0.0), 4, is_direct_buy=False, is_novel_target=True)
+
+    unassayed_exp = ChemRRTExplorer([origin], tau_radius=0.80, eta_step=0.30)
+    unlocked_unassayed = unassayed_exp.expand_toward_targets(
+        [hop1, hop2], [target], require_certification=True
+    )
+    assert unlocked_unassayed == []
+    assert "HOP1" in unassayed_exp.pending_probe_ids
+    assert "HOP1" not in unassayed_exp.support_ids
+    assert "HOP2" not in unassayed_exp.pending_probe_ids
+    assert "HOP2" not in unassayed_exp.support_ids
+
+    # Quarantined callback blocks chaining; SHA-256 certified callback promotes and unlocks target
+    quarantined_exp = ChemRRTExplorer([origin], tau_radius=0.80, eta_step=0.30)
+    assert (
+        quarantined_exp.expand_toward_targets(
+            [hop1, hop2],
+            [target],
+            certify_probe_fn=lambda _: {"admit_to_memory": False, "ledger_entry_sha256": None},
+        )
+        == []
+    )
+    assert "HOP1" in quarantined_exp.quarantined_probe_ids
+    assert "HOP1" not in quarantined_exp.support_ids
+
+    certified_exp = ChemRRTExplorer([origin], tau_radius=0.80, eta_step=0.30)
+    unlocked_cert = certified_exp.expand_toward_targets(
+        [hop1, hop2],
+        [target],
+        certify_probe_fn=lambda p: {
+            "admit_to_memory": True,
+            "ledger_entry_sha256": f"{abs(hash(p.compound_id)):064x}"[:64],
+        },
+    )
+    assert [t.compound_id for t in unlocked_cert] == ["TARGET_DEEP"]
+    assert {"HOP1", "HOP2"}.issubset(certified_exp.support_ids)
+

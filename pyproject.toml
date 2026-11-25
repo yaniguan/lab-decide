@@ -31,5 +31,6 @@ lab-decide = "lab_decide.cli:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 addopts = "-q"

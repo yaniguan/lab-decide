@@ -27,18 +27,22 @@ from lab_decide import (
     assign_calisol_doi_split,
     benchmark_trust_region_bo,
     build_decision_envelopes,
+    compute_covariate_shift_weights,
     compute_scaffold_groups,
     conformal_quantile,
+    conformal_rank,
     conformal_threshold,
     download_file_atomic,
     ensure_esol_csv,
     evaluate_calisol_conformal,
     evaluate_epistemic_probes,
     export_decisions_jsonl,
+    featurize_calisol_records,
     featurize_smiles_batch,
     fit_and_calibrate,
     formulation_kernel_support,
     load_decisions_jsonl,
+    make_synthetic_calisol_records,
     make_synthetic_solubility_dataframe,
     partition_splits,
     run_expansion_campaign,
@@ -47,6 +51,7 @@ from lab_decide import (
     summarize,
     validate_and_clean_dataframe,
     weighted_conformal_quantile,
+    winkler_interval_score,
 )
 from lab_decide.cli import format_esol_report, main as cli_main, run_esol_benchmark
 
@@ -531,3 +536,243 @@ def test_issue_22_decision_envelope_json_schema_and_lab_ask_why_probe_bridge(tmp
     assert len(bridged) == 1
     assert bridged[0].source_claim == "Polar hydroxyl substitution increases aqueous solubility."
     jsonschema.validate(instance=bridged[0].to_dict(), schema=DECISION_ENVELOPE_JSON_SCHEMA)
+
+
+def test_issue_24_weighted_conformal_quantile_exact_ranks_and_covariate_shift_mc() -> None:
+    # 1. Exact unit-weight parity across n = 1..500 (including IEEE-754 boundary n=9, 29, 69, 79, 89, 149)
+    for alpha_val in (0.10, 0.18, 0.25):
+        for n in range(1, 501):
+            scores = np.arange(1.0, float(n + 1))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                q_unw = conformal_quantile(scores, alpha=alpha_val)
+                q_w = weighted_conformal_quantile(scores, np.ones(n), alpha=alpha_val, test_weight=1.0)
+            if math.isinf(q_unw):
+                assert math.isinf(q_w)
+            else:
+                assert q_w == q_unw, f"Mismatch at n={n}, alpha={alpha_val}: {q_w} vs {q_unw}"
+
+    # Scaled uniform weights (0.1 each) and tied scores must also be exact
+    assert weighted_conformal_quantile(
+        np.arange(1.0, 10.0), np.full(9, 0.1), alpha=0.10, test_weight=0.1
+    ) == pytest.approx(9.0)
+    assert weighted_conformal_quantile(
+        np.array([1.0, 2.0, 2.0, 5.0]), np.ones(4), alpha=0.40, test_weight=1.0
+    ) == pytest.approx(2.0)
+
+    # 2. Monte Carlo coverage under severe outer-shell boundary-biased calibration updates
+    cov_reweighted: list[float] = []
+    thr_reweighted: list[float] = []
+    thr_unweighted: list[float] = []
+    for trial in range(25):
+        rng = np.random.default_rng(300 + trial)
+        X_all = rng.normal(0.0, 1.0, size=(320, 2))
+        # Add heavy outer-shell candidates into pool so active picks strongly skew calibration
+        X_shell = rng.uniform(2.2, 3.4, size=(80, 2)) * rng.choice([-1.0, 1.0], size=(80, 2))
+        X_comb = np.vstack([X_all, X_shell])
+        radii = np.linalg.norm(X_comb, axis=1)
+        y_comb = 1.5 * X_comb[:, 0] + rng.normal(0.0, 0.25 + 0.05 * radii, size=len(X_comb))
+
+        tr_idx = np.arange(0, 120)
+        cal_idx = np.arange(120, 190)
+        te_idx = np.arange(190, 280)
+        pool_idx = np.arange(280, len(X_comb))
+
+        hist_rw, _ = run_expansion_campaign(
+            X_comb,
+            y_comb,
+            train_idx=tr_idx,
+            pool_idx=pool_idx,
+            cal_idx=cal_idx,
+            test_idx=te_idx,
+            rounds=2,
+            per_round=25,
+            cal_update_frac=0.60,
+            alpha=0.10,
+            trust_pct=80.0,
+            seed=trial,
+            domain_bounds=None,
+            reweight_covariate_shift=True,
+        )
+        hist_uw, _ = run_expansion_campaign(
+            X_comb,
+            y_comb,
+            train_idx=tr_idx,
+            pool_idx=pool_idx,
+            cal_idx=cal_idx,
+            test_idx=te_idx,
+            rounds=2,
+            per_round=25,
+            cal_update_frac=0.60,
+            alpha=0.10,
+            trust_pct=80.0,
+            seed=trial,
+            domain_bounds=None,
+            reweight_covariate_shift=False,
+        )
+        cov_reweighted.append(hist_rw[-1]["cov_in"])
+        thr_reweighted.append(hist_rw[-1]["threshold"])
+        thr_unweighted.append(hist_uw[-1]["threshold"])
+
+    assert float(np.mean(cov_reweighted)) >= 0.885
+    # Likelihood-ratio weights prevent outer-shell calibration picks from inflating tau
+    assert float(np.mean(thr_reweighted)) < float(np.mean(thr_unweighted))
+
+
+def test_issue_25_mondrian_bin_starvation_warning_and_global_pool_fallback() -> None:
+    X_tr = np.linspace(0.0, 1.0, 30).reshape(-1, 1)
+    X_cal = np.linspace(0.0, 1.0, 10).reshape(-1, 1)
+    y_tr = 2.0 * X_tr[:, 0]
+    y_cal = 2.0 * X_cal[:, 0] + 0.1
+
+    # Global n_cal=10 is certifiable at alpha=0.10, while trust_pct=70 leaves n_in=8 < 9
+    with pytest.warns(UserWarning, match="starvation"):
+        adv_pool = fit_and_calibrate(
+            X_tr, y_tr, X_cal, y_cal, alpha=0.10, trust_pct=70.0, mondrian_fallback="global_pool"
+        )
+    assert math.isfinite(adv_pool.q_marginal)
+    assert math.isfinite(adv_pool.q_in)
+    assert adv_pool.mondrian_fallback_used is True
+    assert adv_pool.q_in >= adv_pool.q_marginal
+    assert int(np.sum(adv_pool.predict(X_tr)["trusted"])) > 0
+
+    with pytest.warns(UserWarning, match="starvation"):
+        adv_strict = fit_and_calibrate(
+            X_tr, y_tr, X_cal, y_cal, alpha=0.10, trust_pct=70.0, mondrian_fallback="none"
+        )
+    assert math.isinf(adv_strict.q_in)
+    assert int(np.sum(adv_strict.predict(X_tr)["trusted"])) == 0
+
+
+def test_issue_26_zero_variance_descriptors_and_unseen_calisol_salts_solvents_rings() -> None:
+    recs = make_synthetic_calisol_records(seed=0)
+    X, y, feat_names = featurize_calisol_records(recs)
+    assert "salt_other" in feat_names and "solv_other_mass" in feat_names
+
+    splits = np.array([r["split"] for r in recs])
+    adv = fit_and_calibrate(
+        X[splits == "train"],
+        y[splits == "train"],
+        X[splits == "cal"],
+        y[splits == "cal"],
+        feature_names=feat_names,
+    )
+    # Zero feature weights are forbidden even on zero-variance training descriptors
+    assert np.all(adv.feature_weights > 0.0)
+
+    for unseen_rec in (
+        {"salt": "LiFSI", "T_K": 298.15, "c": 1.0, "k_mS_cm": 5.0, "solvents": {"PC": 1.0}},
+        {"salt": "NaPF6", "T_K": 298.15, "c": 1.0, "k_mS_cm": 5.0, "solvents": {"EC": 0.5, "DMC": 0.5}},
+        {"salt": "LiPF6", "T_K": 298.15, "c": 1.0, "k_mS_cm": 5.0, "solvents": {"THF": 1.0}},
+    ):
+        X_u, _, _ = featurize_calisol_records([unseen_rec])
+        pred_u = adv.predict(X_u)
+        assert pred_u["distance"][0] > adv.threshold
+        assert not pred_u["trusted"][0]
+        assert pred_u["decision"][0] == "ABSTAIN_ACQUIRE"
+
+    # Acyclic training set (Rings == 0 everywhere) must abstain on polycyclic query (Rings == 3)
+    rng = np.random.default_rng(7)
+    X_acyclic_tr = np.column_stack([rng.uniform(60.0, 200.0, size=50), np.zeros(50)])
+    y_acyclic_tr = -0.01 * X_acyclic_tr[:, 0] + rng.normal(0.0, 0.1, size=50)
+    X_acyclic_cal = np.column_stack([rng.uniform(60.0, 200.0, size=30), np.zeros(30)])
+    y_acyclic_cal = -0.01 * X_acyclic_cal[:, 0] + rng.normal(0.0, 0.1, size=30)
+    adv_ring = fit_and_calibrate(X_acyclic_tr, y_acyclic_tr, X_acyclic_cal, y_acyclic_cal)
+
+    poly_pred = adv_ring.predict(np.array([[130.0, 3.0]]))
+    assert not poly_pred["trusted"][0]
+    assert poly_pred["decision"][0] == "ABSTAIN_ACQUIRE"
+
+    # Benign numerical precision noise (1e-11) on constant or near-singular columns does not false-abstain
+    jitter_pred = adv_ring.predict(np.array([[130.0, 1e-11]]))
+    assert jitter_pred["trusted"][0]
+
+
+def test_issue_27_exhaustive_conformal_rank_parity_with_lab_decide_lean() -> None:
+    from community_extensions.mondrian_drift_conformal import conformal_order_rank
+
+    # Check exact parity at the known binary64 failure case n=149, alpha=0.18
+    residuals_149 = [round(0.01 * (i + 1), 4) for i in range(149)]
+    lean_149 = ((149 + 1) * (1000 - 180) + 999) // 1000
+    assert lean_149 == 123
+    assert conformal_rank(149, 0.18) == 123
+    assert conformal_order_rank(149, 0.18) == 123
+    assert conformal_quantile(residuals_149, alpha=0.18) == pytest.approx(1.23)
+
+    # Exhaustively verify (n, alphaPermille) parity across n in 0..120 and all alphaPermille in 1..999
+    for n in range(0, 121):
+        for ap in range(1, 1000):
+            lean_k = ((n + 1) * (1000 - ap) + 999) // 1000
+            alpha_f = ap / 1000.0
+            assert conformal_rank(n, alpha_f) == lean_k
+            assert conformal_rank(n, alpha_permille=ap) == lean_k
+            assert conformal_order_rank(n, alpha_f) == lean_k
+
+
+def test_issue_29_cqr_r_crossing_guard_small_alpha_asymmetric_bo_and_calisol() -> None:
+    # 1. Exact Issue #29 reproducer: negative q_in in additive CQR must NEVER invert lo > hi
+    rng = np.random.default_rng(11)
+    X_tr = rng.uniform(0.0, 1.0, size=(120, 2))
+    y_tr = 2.0 * X_tr[:, 0] + np.where(
+        X_tr[:, 0] < 0.25, rng.normal(0.0, 0.01, 120), rng.normal(0.0, 2.5, 120)
+    )
+    X_cal = rng.uniform(0.3, 1.0, size=(60, 2))
+    y_cal = 2.0 * X_cal[:, 0] + rng.normal(0.0, 0.1, size=60)
+
+    adv_cqr = fit_and_calibrate(
+        X_tr, y_tr, X_cal, y_cal, alpha=0.20, nonconformity="cqr", domain_bounds=None, seed=11
+    )
+    X_te = np.column_stack([np.linspace(0.02, 0.20, 30), np.full(30, 0.5)])
+    res_cqr = adv_cqr.predict(X_te)
+    assert adv_cqr.q_in < 0.0
+    assert np.all(res_cqr["lo"] <= res_cqr["hi"])
+    assert np.all(res_cqr["width"] >= 0.0)
+    assert np.all((res_cqr["lo"] <= res_cqr["pred"]) & (res_cqr["pred"] <= res_cqr["hi"]))
+
+    # 2. Locally scaled CQR-r adapts proportionally without collapsing low-noise regions to zero width
+    adv_cqrr = fit_and_calibrate(
+        X_tr, y_tr, X_cal, y_cal, alpha=0.20, nonconformity="cqr_r", domain_bounds=None, seed=11
+    )
+    res_cqrr = adv_cqrr.predict(X_te)
+    assert np.all(res_cqrr["lo"] <= res_cqrr["hi"])
+    assert float(np.min(res_cqrr["width"])) > 0.0
+
+    # Small alpha < 0.02 must NOT clamp quantile tree alphas to 0.01 / 0.99
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        adv_small_alpha = fit_and_calibrate(
+            X_tr, y_tr, X_cal, y_cal, alpha=0.005, nonconformity="cqr_r", domain_bounds=None, seed=11
+        )
+    assert adv_small_alpha.lower_model.alpha == pytest.approx(0.0025)
+    assert adv_small_alpha.upper_model.alpha == pytest.approx(0.9975)
+
+    # 3. Heteroscedastic solubility Winkler efficiency: CQR-r beats homoscedastic absolute intervals
+    rng2 = np.random.default_rng(21)
+    X_h = rng2.uniform(0.0, 1.0, size=(360, 2))
+    sigma_h = 0.08 + 1.8 * (X_h[:, 0] ** 2)
+    y_h = -3.0 * X_h[:, 0] + rng2.normal(0.0, sigma_h)
+    adv_abs = fit_and_calibrate(
+        X_h[:180], y_h[:180], X_h[180:270], y_h[180:270], nonconformity="absolute", domain_bounds=None, seed=21
+    )
+    adv_r = fit_and_calibrate(
+        X_h[:180], y_h[:180], X_h[180:270], y_h[180:270], nonconformity="cqr_r", domain_bounds=None, seed=21
+    )
+    p_abs = adv_abs.predict(X_h[270:], use_mondrian=False)
+    p_r = adv_r.predict(X_h[270:], use_mondrian=False)
+    w_abs = winkler_interval_score(y_h[270:], p_abs["lo"], p_abs["hi"], alpha=0.10)
+    w_r = winkler_interval_score(y_h[270:], p_r["lo"], p_r["hi"], alpha=0.10)
+    assert w_r < w_abs
+
+    # 4. Asymmetric directional TrustRegionAdvisor UCB & dynamic-alpha EI
+    planner = TrustRegionAdvisor(adv_r)
+    props_max = planner.propose(X_h[:20], mode="conformal_ucb", batch_size=3, maximize=True, beta=1.0)
+    props_min = planner.propose(X_h[:20], mode="conformal_ucb", batch_size=3, maximize=False, beta=1.0)
+    assert props_max[0].acquisition_score == pytest.approx(props_max[0].hi)
+    assert props_min[0].acquisition_score == pytest.approx(-props_min[0].lo)
+
+    # 5. CALiSol-23 CQR-r adapter exposes nonconformity and Winkler score
+    cal_cqrr = evaluate_calisol_conformal(csv_path=None, seed=0, nonconformity="cqr_r")
+    assert cal_cqrr["nonconformity"] == "cqr_r"
+    assert math.isfinite(cal_cqrr["winkler_in"])
+    assert cal_cqrr["cov_in"] >= 0.85
+
