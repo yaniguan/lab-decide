@@ -17,7 +17,8 @@ Epistemic experiment advisor and uncertainty-aware decision layer (`L6`) that de
 
 ### Data
 - **Active Benchmark (`ESOL`, Delaney 2004)**: `1,128` compounds fetched on demand into gitignored `data/delaney-processed.csv` (`676` train / `226` calibration / `226` test at `SEED = 0`), predicting `measured log solubility in mols per litre` ($\log_{10} S \in [-11.60, 1.58]$) from `6` physical/topological descriptors while excluding the CSV's pre-fitted `ESOL predicted` column.
-- **Curated Catalog**: Indexes `5` reaction/experiment optimization benchmarks (`ESOL`, `EDBO`, `EDBO+`, `rxn_yields`, `Olympus`), `12` open-source BO & conformal libraries (`BoTorch`, `Ax`, `MAPIE`, `BayBE`, `TuRBO`, `SafeOpt`, `Summit`, `Gryffin`), and `12` foundational & 2024–2026 papers.
+- **Open Calibration Dataset Registry (`src/lab_decide/datasets.py`)**: Typed `OpenCalibrationDataset` registry and deterministic CSV/TSV/JSON/JSONL schema loaders across **`11` live-verified open-source molecular solubility, electrolyte solvation, ADMET, and high-throughput reaction optimization (BO) benchmarks** (`esol_delaney`, `aqsoldb`, `bigsoldb_v2_2`, `calisol23`, `freesolv`, `lipophilicity_astrazeneca`, `biogen_adme`, `buchwald_hartwig_doyle`, `suzuki_miyaura_perera`, `direct_arylation_shields`, and `bh_hte_ood_2026`), fetched on demand to gitignored `data/` via `scripts/fetch_open_datasets.py`.
+- **Curated Catalog**: Indexes open reaction/experiment optimization benchmarks (`EDBO`, `EDBO+`, `rxn_yields`, `Olympus`), `12` open-source BO & conformal libraries (`BoTorch`, `Ax`, `MAPIE`, `BayBE`, `TuRBO`, `SafeOpt`, `Summit`, `Gryffin`), and `12` foundational & 2024–2026 papers.
 
 ### Model
 Huber `GradientBoostingRegressor(loss="huber", random_state=0)` paired with finite-sample Mondrian / selective Split Conformal Prediction ($\alpha = 0.10$, exact rational order-statistic rank $\lceil(n_{\text{cal,in}}+1)(1-\alpha)\rceil$ aligned with `LabDecideLean.conformalRank`, returning $\infty$ without clamping when $n < (1-\alpha)/\alpha$), Tibshirani-Foygel-Barber likelihood-ratio weighted calibration under active boundary covariate shift, locally scaled Conformalized Quantile Regression (`cqr_r`) with monotonic `lo <= hi` crossing guards, domain-bound clipping, zero-variance OOD invariant guarding on standardized `NearestNeighbors` applicability-domain gating, RDKit SMILES-to-descriptor bridging, and `TrustRegionAdvisor` constrained Bayesian optimization (`conformal_ucb`, `conformal_ei`, `safe_expand`).
@@ -57,11 +58,14 @@ lab-decide/
 │   └── ARCHITECTURE_AND_HISTORY.md   # Deep technical profile (Object, Data, Model, Training, History)
 ├── lean/
 │   └── LabDecideLean.lean            # Lean 4 formalization of finite-sample conformal & frontier guards
-├── src/lab_decide/                   # Installable package (ConformalTrustModel, TrustRegionAdvisor, RDKit, DecisionEnvelope)
+├── scripts/
+│   └── fetch_open_datasets.py        # On-demand atomic downloader, live URL checker & calibrator
+├── src/lab_decide/                   # Installable package (ConformalTrustModel, OpenCalibrationDataset, TrustRegionAdvisor)
 ├── tests/
 │   ├── test_autolab_wire.py          # autolab-wire/v1 contract & closed-loop recalibration tests
 │   ├── test_community_extensions.py  # Mondrian-ACI & Chem-RRT unit and benchmark tests
-│   └── test_conformal_trust.py       # Offline pytest regression suite (#1..#22)
+│   ├── test_conformal_trust.py       # Offline pytest regression suite (#1..#29)
+│   └── test_open_datasets_2026.py    # Registry, SPDX license, anti-leakage & multi-dataset conformal tests
 ├── autolab_wire.py                   # L6 Auto-Lab 15-repository wire node (process_packet)
 ├── .gitignore                        # Excludes downloaded ESOL data/ & caches
 ├── LICENSE                           # MIT License (code)
@@ -77,6 +81,9 @@ pip install -r requirements.txt -e .
 python demo/conformal_trust.py
 lab-decide --nonconformity cqr --split scaffold
 lab-decide --dataset calisol23 --offline
+lab-decide --dataset aqsoldb --offline --json
+python scripts/fetch_open_datasets.py --list
+python scripts/fetch_open_datasets.py --dataset freesolv,direct_arylation_shields --calibrate
 lab-decide --export-schema decision_envelope.schema.json
 ```
 
@@ -110,12 +117,31 @@ Coverage stays near the 90% target, and error is lower inside the region (MAE 0.
 
 ## Datasets
 
-| Dataset | What | License |
+### Integrated Open Calibration Registry (`OpenCalibrationDataset`)
+
+All `11` datasets in `lab_decide.datasets.OPEN_CALIBRATION_DATASETS` carry live-verified HTTPS download URLs, SPDX open-license metadata (`commercial_use_ok = True`), leakage-free CSV/TSV/JSON/JSONL schema loaders, and on-demand atomic caching under gitignored `data/`:
+
+| `dataset_id` | Domain | Target Unit | Records | SPDX License | Source & Reference |
+|---|---|---|---:|---|---|
+| [`esol_delaney`](https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/delaney-processed.csv) | `molecular_solubility` | `log10(mol/L)` | `1,128` | `MIT` | Delaney, *JCICS* 2004 ([`10.1021/ci034243x`](https://doi.org/10.1021/ci034243x)) / MoleculeNet |
+| [`aqsoldb`](https://doi.org/10.7910/DVN/OVHAW8) | `molecular_solubility` | `log10(mol/L)` | `9,982` | `CC0-1.0` | Sorkun et al., *Sci. Data* 2019 ([`10.1038/s41597-019-0151-1`](https://doi.org/10.1038/s41597-019-0151-1)) / Harvard Dataverse |
+| [`bigsoldb_v2_2`](https://doi.org/10.5281/zenodo.22648301) | `molecular_solubility` | `log10(mol/L)` | `125,752` | `CC-BY-4.0` | Krasnov et al., *Sci. Data* 2025 / Zenodo 2026 ([`10.1038/s41597-025-05559-8`](https://doi.org/10.1038/s41597-025-05559-8)) |
+| [`calisol23`](https://doi.org/10.11583/DTU.24559960) | `electrolyte_solvation` | `log1p(mS/cm)` | `13,825` | `CC-BY-4.0` | de Blasio et al., *Sci. Data* 2024 ([`10.1038/s41597-024-03575-8`](https://doi.org/10.1038/s41597-024-03575-8)) |
+| [`freesolv`](https://github.com/MobleyLab/FreeSolv) | `admet` | `kcal/mol` | `642` | `CC-BY-4.0` | Mobley & Guthrie, *JCAMD* 2014 ([`10.1007/s10822-014-9747-x`](https://doi.org/10.1007/s10822-014-9747-x)) |
+| [`lipophilicity_astrazeneca`](https://www.ebi.ac.uk/chembl/document_report_card/CHEMBL3301361/) | `admet` | `logD7.4` | `4,200` | `CC-BY-SA-3.0` | AstraZeneca ChEMBL3301361 ([`10.6019/CHEMBL3301361`](https://doi.org/10.6019/CHEMBL3301361)) / TDC & ADMET-AI |
+| [`biogen_adme`](https://github.com/molecularinformatics/Computational-ADME) | `admet` | `log10(mL/min/kg)` | `3,521` | `MIT` | Fang et al., *JCIM* 2023 ([`10.1021/acs.jcim.3c00160`](https://doi.org/10.1021/acs.jcim.3c00160)) / Biogen Research |
+| [`buchwald_hartwig_doyle`](https://github.com/emdgroup/baybe) | `reaction_optimization` | `yield_pct` | `4,599` | `Apache-2.0` | Ahneman et al., *Science* 2018 ([`10.1126/science.aar5169`](https://doi.org/10.1126/science.aar5169)) / BayBE HTE |
+| [`suzuki_miyaura_perera`](https://github.com/rxn4chemistry/rxn_yields) | `reaction_optimization` | `yield_pct` | `5,760` | `MIT` | Perera et al., *Science* 2018 ([`10.1126/science.aap9112`](https://doi.org/10.1126/science.aap9112)) / `rxn_yields` |
+| [`direct_arylation_shields`](https://github.com/b-shields/edbo) | `reaction_optimization` | `yield_pct` | `1,728` | `Apache-2.0` | Shields et al., *Nature* 2021 ([`10.1038/s41586-021-03213-y`](https://doi.org/10.1038/s41586-021-03213-y)) / EDBO & BayBE |
+| [`bh_hte_ood_2026`](https://doi.org/10.5281/zenodo.19636649) | `reaction_optimization` | `yield_pct` | `27,497` | `CC-BY-4.0` | Neves et al., *Nat. Comput. Sci.* 2026 ([`10.1038/s43588-026-01017-6`](https://doi.org/10.1038/s43588-026-01017-6)) / Schwaller & J&J |
+
+### Additional Optimization Frameworks & Suites
+
+| Suite | What | License |
 |---|---|---|
-| [ESOL (Delaney 2004)](https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/delaney-processed.csv) | 1128 compounds, measured solubility | Public research data; cite [Delaney 2004](https://doi.org/10.1021/ci034243x) |
 | [EDBO reaction data](https://github.com/b-shields/edbo) | Reaction optimization data used to benchmark BO | MIT |
 | [EDBO+](https://github.com/doyle-lab-ucla/edboplus) | Multi-objective reaction optimization | See repo |
-| [Reaction yields (Buchwald-Hartwig etc.)](https://github.com/rxn4chemistry/rxn_yields) | High-throughput yield datasets | See repo |
+| [Reaction yields (`rxn_yields`)](https://github.com/rxn4chemistry/rxn_yields) | High-throughput cross-coupling yield benchmarks | MIT |
 | [Olympus](https://github.com/the-matter-lab/olympus) | Benchmark surfaces and experiment-planning datasets | MIT |
 
 ## Open-source repos

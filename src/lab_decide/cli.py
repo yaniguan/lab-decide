@@ -23,6 +23,12 @@ from lab_decide.data import (
     load_dataset,
     partition_splits,
 )
+from lab_decide.datasets import (
+    OPEN_CALIBRATION_DATASETS,
+    calibrate_open_dataset,
+    default_dataset_cache_path,
+    write_schema_sample_fixture,
+)
 from lab_decide.schema import (
     DecisionEnvelope,
     build_decision_envelopes,
@@ -248,9 +254,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Conformal trust-region experiment advisor and constrained BO planner.",
     )
     parser.add_argument("--csv", type=str, default=None, help="Path to custom tabular CSV dataset.")
+    dataset_choices = tuple(
+        dict.fromkeys(("esol", "calisol23", "synthetic", *OPEN_CALIBRATION_DATASETS.keys()))
+    )
     parser.add_argument(
         "--dataset",
-        choices=("esol", "calisol23", "synthetic"),
+        choices=dataset_choices,
         default="esol",
         help="Benchmark dataset adapter to execute.",
     )
@@ -352,6 +361,59 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"kernel-gate agreement={clean_cal['knn_vs_kernel_support_agreement']:.3f}"
                 )
             return 0
+
+        if args.dataset not in ("esol", "calisol23", "synthetic"):
+            import tempfile
+
+            resolved_path = args.csv
+            temp_dir_ctx = None
+            try:
+                if resolved_path is None and args.offline:
+                    cached = default_dataset_cache_path(args.dataset)
+                    if os.path.exists(cached):
+                        resolved_path = cached
+                    else:
+                        temp_dir_ctx = tempfile.TemporaryDirectory()
+                        ext = OPEN_CALIBRATION_DATASETS[args.dataset].file_format
+                        resolved_path = write_schema_sample_fixture(
+                            args.dataset,
+                            os.path.join(temp_dir_ctx.name, f"sample.{ext}"),
+                            n=120,
+                            seed=args.seed,
+                        )
+                adv_ds, bundle_ds, splits_ds, metrics_ds = calibrate_open_dataset(
+                    args.dataset,
+                    path=resolved_path,
+                    alpha=args.alpha,
+                    k=args.k,
+                    trust_pct=args.trust_pct,
+                    nonconformity=args.nonconformity,
+                    split_strategy=args.split,
+                    seed=args.seed,
+                    offline=args.offline,
+                )
+                if args.export_decisions:
+                    te_envs = build_decision_envelopes(
+                        adv_ds,
+                        bundle_ds.X[splits_ds.test_idx],
+                        candidate_ids=[bundle_ds.compound_ids[int(i)] for i in splits_ds.test_idx],
+                        smiles=[bundle_ds.smiles[int(i)] for i in splits_ds.test_idx],
+                    )
+                    export_decisions_jsonl(te_envs, args.export_decisions)
+                clean_m = _json_clean(metrics_ds)
+                if out_fmt == "json":
+                    print(json.dumps(clean_m, indent=2))
+                else:
+                    print(
+                        f"{clean_m['dataset_id']} ({clean_m['domain']}, {clean_m['spdx_license']}): "
+                        f"n={clean_m['n_clean']} | answered={clean_m['answered_fraction']:.3f} "
+                        f"cov_in={clean_m['cov_in']:.3f} MAE_in={clean_m['mae_in']:.3f} "
+                        f"width_in={clean_m['width_in']:.3f} ({clean_m['target_unit']})"
+                    )
+                return 0
+            finally:
+                if temp_dir_ctx is not None:
+                    temp_dir_ctx.cleanup()
 
         features = (
             [f.strip() for f in args.features.split(",") if f.strip()]
