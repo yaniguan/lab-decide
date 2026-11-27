@@ -19,6 +19,9 @@ dependencies = [
 chem = [
     "rdkit>=2023.9",
 ]
+bo = [
+    "lightgbm>=4.0,<5.0",
+]
 dev = [
     "pytest>=8.0,<10.0",
     "jsonschema>=4.18,<5.0",
@@ -29,6 +32,9 @@ lab-decide = "lab_decide.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+lab_decide = ["resources/*.csv"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]

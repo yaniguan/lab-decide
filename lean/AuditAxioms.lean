@@ -1,0 +1,25 @@
+import LabDecideLean
+
+#print axioms LabDecideLean.firstViolation_nil
+#print axioms LabDecideLean.firstViolation_cons
+#print axioms LabDecideLean.firstViolation_none_iff
+#print axioms LabDecideLean.checkDecide_ok_iff
+#print axioms LabDecideLean.out_of_domain_always_abstains
+#print axioms LabDecideLean.undersized_calib_always_abstains
+#print axioms LabDecideLean.conformalRank_pos
+#print axioms LabDecideLean.conformalRank_exact_lower
+#print axioms LabDecideLean.conformalRank_exact_upper
+#print axioms LabDecideLean.physical_bounds_respected
+#print axioms LabDecideLean.frontierOuterRadius_ge_tau
+#print axioms LabDecideLean.interior_rejected_as_frontier_probe
+#print axioms LabDecideLean.frontier_calibration_strictly_annular
+#print axioms LabDecideLean.deep_ood_always_blocked
+#print axioms LabDecideLean.accepted_outside_tau_is_bounded_probe
+#print axioms LabDecideLean.checkSupportHop_ok_iff
+#print axioms LabDecideLean.checkCertifiedChain_nil
+#print axioms LabDecideLean.checkCertifiedChain_cons
+#print axioms LabDecideLean.unassayed_probe_blocks_chaining
+#print axioms LabDecideLean.unassayed_hop_blocks_chain
+#print axioms LabDecideLean.certified_hop_annular_bounds
+#print axioms LabDecideLean.certified_chain_annular_span
+#print axioms LabDecideLean.exploitation_after_chain_sound

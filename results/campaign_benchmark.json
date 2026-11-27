@@ -1,0 +1,3393 @@
+{
+  "schema_version": "lab-decide-campaign-benchmark/v1",
+  "data_source": "real_csv",
+  "elapsed_seconds": 422.303,
+  "n_seeds": 10,
+  "rounds": 6,
+  "batch_size": 8,
+  "methods": [
+    "random",
+    "greedy",
+    "unconstrained_conformal_ucb",
+    "tr_conformal_ucb",
+    "tr_conformal_ei",
+    "gp_ei",
+    "lightgbm_cqr_ucb",
+    "lightgbm_cqr_tr_ucb"
+  ],
+  "datasets": [
+    {
+      "dataset_id": "esol_delaney",
+      "target_unit": "log10(mol/L)",
+      "objective_direction": "maximize",
+      "data_source": "real_csv",
+      "encoding": "descriptors",
+      "distance_metric": "euclidean",
+      "split_fractions": [
+        0.15,
+        0.55,
+        0.15,
+        0.15
+      ],
+      "n_clean": 1123,
+      "n_seeds": 10,
+      "rounds": 6,
+      "batch_size": 8,
+      "lowest_mean_regret_method": "tr_conformal_ucb",
+      "methods_within_1se_of_best_regret": [
+        "tr_conformal_ucb",
+        "tr_conformal_ei",
+        "greedy",
+        "unconstrained_conformal_ucb",
+        "gp_ei"
+      ],
+      "lowest_regret_trust_region_safe_method": "tr_conformal_ucb",
+      "methods": {
+        "random": {
+          "method": "random",
+          "final_best_so_far": {
+            "mean": 0.62,
+            "sd": 0.237346
+          },
+          "final_simple_regret": {
+            "mean": 0.8884,
+            "sd": 0.297155
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.19375,
+            "sd": 0.036812
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": -0.6053,
+                "sd": 0.838989
+              },
+              "simple_regret": {
+                "mean": 2.1137,
+                "sd": 0.931444
+              },
+              "round_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.120761
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.120761
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": -0.1727,
+                "sd": 0.699276
+              },
+              "simple_regret": {
+                "mean": 1.6811,
+                "sd": 0.771096
+              },
+              "round_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.10623
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.19375,
+                "sd": 0.062152
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 0.1479,
+                "sd": 0.78391
+              },
+              "simple_regret": {
+                "mean": 1.3605,
+                "sd": 0.832831
+              },
+              "round_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.135015
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.191667,
+                "sd": 0.059577
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 0.473,
+                "sd": 0.38896
+              },
+              "simple_regret": {
+                "mean": 1.0354,
+                "sd": 0.451937
+              },
+              "round_ood_fraction": {
+                "mean": 0.25,
+                "sd": 0.058926
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.20625,
+                "sd": 0.044683
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 0.62,
+                "sd": 0.237346
+              },
+              "simple_regret": {
+                "mean": 0.8884,
+                "sd": 0.297155
+              },
+              "round_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.147314
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2025,
+                "sd": 0.051975
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 0.62,
+                "sd": 0.237346
+              },
+              "simple_regret": {
+                "mean": 0.8884,
+                "sd": 0.297155
+              },
+              "round_ood_fraction": {
+                "mean": 0.15,
+                "sd": 0.114867
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.19375,
+                "sd": 0.036812
+              }
+            }
+          ]
+        },
+        "greedy": {
+          "method": "greedy",
+          "final_best_so_far": {
+            "mean": 1.504,
+            "sd": 0.160083
+          },
+          "final_simple_regret": {
+            "mean": 0.0044,
+            "sd": 0.013914
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.09375,
+            "sd": 0.077486
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 1.375,
+                "sd": 0.235525
+              },
+              "simple_regret": {
+                "mean": 0.1334,
+                "sd": 0.202956
+              },
+              "round_ood_fraction": {
+                "mean": 0.2125,
+                "sd": 0.195878
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2125,
+                "sd": 0.195878
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.1125,
+                "sd": 0.149652
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.1625,
+                "sd": 0.129099
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.05,
+                "sd": 0.06455
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.125,
+                "sd": 0.083333
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.05,
+                "sd": 0.120761
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.10625,
+                "sd": 0.08615
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0625,
+                "sd": 0.088388
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0975,
+                "sd": 0.082874
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.075,
+                "sd": 0.158114
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.09375,
+                "sd": 0.077486
+              }
+            }
+          ]
+        },
+        "unconstrained_conformal_ucb": {
+          "method": "unconstrained_conformal_ucb",
+          "final_best_so_far": {
+            "mean": 1.504,
+            "sd": 0.160083
+          },
+          "final_simple_regret": {
+            "mean": 0.0044,
+            "sd": 0.013914
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.270833,
+            "sd": 0.141299
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 1.195,
+                "sd": 0.376482
+              },
+              "simple_regret": {
+                "mean": 0.3134,
+                "sd": 0.351606
+              },
+              "round_ood_fraction": {
+                "mean": 0.65,
+                "sd": 0.316228
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.65,
+                "sd": 0.316228
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 1.473,
+                "sd": 0.251133
+              },
+              "simple_regret": {
+                "mean": 0.0354,
+                "sd": 0.111945
+              },
+              "round_ood_fraction": {
+                "mean": 0.2875,
+                "sd": 0.317597
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.46875,
+                "sd": 0.232457
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0875,
+                "sd": 0.084369
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.341667,
+                "sd": 0.180876
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.277951
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.303125,
+                "sd": 0.182841
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.188193
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2825,
+                "sd": 0.151863
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.2125,
+                "sd": 0.212867
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.270833,
+                "sd": 0.141299
+              }
+            }
+          ]
+        },
+        "tr_conformal_ucb": {
+          "method": "tr_conformal_ucb",
+          "final_best_so_far": {
+            "mean": 1.504,
+            "sd": 0.160083
+          },
+          "final_simple_regret": {
+            "mean": 0.0044,
+            "sd": 0.013914
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 1.401,
+                "sd": 0.32875
+              },
+              "simple_regret": {
+                "mean": 0.1074,
+                "sd": 0.298613
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 1.409,
+                "sd": 0.319286
+              },
+              "simple_regret": {
+                "mean": 0.0994,
+                "sd": 0.29919
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        },
+        "tr_conformal_ei": {
+          "method": "tr_conformal_ei",
+          "final_best_so_far": {
+            "mean": 1.504,
+            "sd": 0.160083
+          },
+          "final_simple_regret": {
+            "mean": 0.0044,
+            "sd": 0.013914
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 1.351,
+                "sd": 0.338081
+              },
+              "simple_regret": {
+                "mean": 0.1574,
+                "sd": 0.319744
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 1.454,
+                "sd": 0.208071
+              },
+              "simple_regret": {
+                "mean": 0.0544,
+                "sd": 0.157177
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        },
+        "gp_ei": {
+          "method": "gp_ei",
+          "final_best_so_far": {
+            "mean": 1.504,
+            "sd": 0.160083
+          },
+          "final_simple_regret": {
+            "mean": 0.0044,
+            "sd": 0.013914
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.302083,
+            "sd": 0.07099
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 1.45,
+                "sd": 0.251794
+              },
+              "simple_regret": {
+                "mean": 0.0584,
+                "sd": 0.12654
+              },
+              "round_ood_fraction": {
+                "mean": 0.65,
+                "sd": 0.210819
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.65,
+                "sd": 0.210819
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 1.473,
+                "sd": 0.251133
+              },
+              "simple_regret": {
+                "mean": 0.0354,
+                "sd": 0.111945
+              },
+              "round_ood_fraction": {
+                "mean": 0.4375,
+                "sd": 0.244736
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.54375,
+                "sd": 0.141452
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.2875,
+                "sd": 0.144938
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.458333,
+                "sd": 0.094199
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.179215
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.390625,
+                "sd": 0.104427
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.1,
+                "sd": 0.141912
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.3325,
+                "sd": 0.079974
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 1.504,
+                "sd": 0.160083
+              },
+              "simple_regret": {
+                "mean": 0.0044,
+                "sd": 0.013914
+              },
+              "round_ood_fraction": {
+                "mean": 0.15,
+                "sd": 0.174801
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.302083,
+                "sd": 0.07099
+              }
+            }
+          ]
+        },
+        "lightgbm_cqr_ucb": {
+          "method": "lightgbm_cqr_ucb",
+          "final_best_so_far": {
+            "mean": 1.27,
+            "sd": 0.332466
+          },
+          "final_simple_regret": {
+            "mean": 0.2384,
+            "sd": 0.283351
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.404167,
+            "sd": 0.248102
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 0.6062,
+                "sd": 0.951292
+              },
+              "simple_regret": {
+                "mean": 0.9022,
+                "sd": 0.970765
+              },
+              "round_ood_fraction": {
+                "mean": 0.55,
+                "sd": 0.41332
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.55,
+                "sd": 0.41332
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 1.022,
+                "sd": 0.324441
+              },
+              "simple_regret": {
+                "mean": 0.4864,
+                "sd": 0.303221
+              },
+              "round_ood_fraction": {
+                "mean": 0.6,
+                "sd": 0.35746
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.575,
+                "sd": 0.294333
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 1.185,
+                "sd": 0.347507
+              },
+              "simple_regret": {
+                "mean": 0.3234,
+                "sd": 0.30206
+              },
+              "round_ood_fraction": {
+                "mean": 0.3375,
+                "sd": 0.412689
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.495833,
+                "sd": 0.299466
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 1.27,
+                "sd": 0.332466
+              },
+              "simple_regret": {
+                "mean": 0.2384,
+                "sd": 0.283351
+              },
+              "round_ood_fraction": {
+                "mean": 0.3125,
+                "sd": 0.290175
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.45,
+                "sd": 0.287621
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 1.27,
+                "sd": 0.332466
+              },
+              "simple_regret": {
+                "mean": 0.2384,
+                "sd": 0.283351
+              },
+              "round_ood_fraction": {
+                "mean": 0.2875,
+                "sd": 0.333594
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.4175,
+                "sd": 0.2853
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 1.27,
+                "sd": 0.332466
+              },
+              "simple_regret": {
+                "mean": 0.2384,
+                "sd": 0.283351
+              },
+              "round_ood_fraction": {
+                "mean": 0.3375,
+                "sd": 0.412689
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.404167,
+                "sd": 0.248102
+              }
+            }
+          ]
+        },
+        "lightgbm_cqr_tr_ucb": {
+          "method": "lightgbm_cqr_tr_ucb",
+          "final_best_so_far": {
+            "mean": 1.382,
+            "sd": 0.280864
+          },
+          "final_simple_regret": {
+            "mean": 0.1264,
+            "sd": 0.264862
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 0.861,
+                "sd": 0.609038
+              },
+              "simple_regret": {
+                "mean": 0.6474,
+                "sd": 0.599913
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 1.0966,
+                "sd": 0.441324
+              },
+              "simple_regret": {
+                "mean": 0.4118,
+                "sd": 0.408162
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 1.2874,
+                "sd": 0.365976
+              },
+              "simple_regret": {
+                "mean": 0.221,
+                "sd": 0.29821
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 1.3394,
+                "sd": 0.281487
+              },
+              "simple_regret": {
+                "mean": 0.169,
+                "sd": 0.276285
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 1.3394,
+                "sd": 0.281487
+              },
+              "simple_regret": {
+                "mean": 0.169,
+                "sd": 0.276285
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 1.382,
+                "sd": 0.280864
+              },
+              "simple_regret": {
+                "mean": 0.1264,
+                "sd": 0.264862
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "dataset_id": "direct_arylation_shields",
+      "target_unit": "yield_pct",
+      "objective_direction": "maximize",
+      "data_source": "real_csv",
+      "encoding": "onehot_morgan",
+      "distance_metric": "mahalanobis",
+      "split_fractions": [
+        0.15,
+        0.55,
+        0.15,
+        0.15
+      ],
+      "n_clean": 1728,
+      "n_seeds": 10,
+      "rounds": 6,
+      "batch_size": 8,
+      "lowest_mean_regret_method": "tr_conformal_ucb",
+      "methods_within_1se_of_best_regret": [
+        "tr_conformal_ucb",
+        "tr_conformal_ei",
+        "lightgbm_cqr_tr_ucb",
+        "greedy",
+        "gp_ei",
+        "lightgbm_cqr_ucb"
+      ],
+      "lowest_regret_trust_region_safe_method": "tr_conformal_ucb",
+      "methods": {
+        "random": {
+          "method": "random",
+          "final_best_so_far": {
+            "mean": 90.6,
+            "sd": 5.070255
+          },
+          "final_simple_regret": {
+            "mean": 9.398,
+            "sd": 5.069869
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.197917,
+            "sd": 0.054015
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 68.973,
+                "sd": 19.095737
+              },
+              "simple_regret": {
+                "mean": 31.025,
+                "sd": 19.096465
+              },
+              "round_ood_fraction": {
+                "mean": 0.225,
+                "sd": 0.129099
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.225,
+                "sd": 0.129099
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 75.384,
+                "sd": 18.370224
+              },
+              "simple_regret": {
+                "mean": 24.614,
+                "sd": 18.370205
+              },
+              "round_ood_fraction": {
+                "mean": 0.225,
+                "sd": 0.16457
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.225,
+                "sd": 0.114867
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 83.643,
+                "sd": 11.879762
+              },
+              "simple_regret": {
+                "mean": 16.355,
+                "sd": 11.878188
+              },
+              "round_ood_fraction": {
+                "mean": 0.15,
+                "sd": 0.141912
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.095823
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 84.788,
+                "sd": 11.490331
+              },
+              "simple_regret": {
+                "mean": 15.21,
+                "sd": 11.489857
+              },
+              "round_ood_fraction": {
+                "mean": 0.1625,
+                "sd": 0.118585
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.190625,
+                "sd": 0.074317
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 88.921,
+                "sd": 8.897051
+              },
+              "simple_regret": {
+                "mean": 11.077,
+                "sd": 8.897251
+              },
+              "round_ood_fraction": {
+                "mean": 0.225,
+                "sd": 0.174801
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.1975,
+                "sd": 0.05584
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 90.6,
+                "sd": 5.070255
+              },
+              "simple_regret": {
+                "mean": 9.398,
+                "sd": 5.069869
+              },
+              "round_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.120761
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.197917,
+                "sd": 0.054015
+              }
+            }
+          ]
+        },
+        "greedy": {
+          "method": "greedy",
+          "final_best_so_far": {
+            "mean": 99.998,
+            "sd": 0.006325
+          },
+          "final_simple_regret": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.039583,
+            "sd": 0.031748
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 97.579,
+                "sd": 4.645886
+              },
+              "simple_regret": {
+                "mean": 2.419,
+                "sd": 4.646957
+              },
+              "round_ood_fraction": {
+                "mean": 0.0625,
+                "sd": 0.088388
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0625,
+                "sd": 0.088388
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 98.837,
+                "sd": 3.663684
+              },
+              "simple_regret": {
+                "mean": 1.161,
+                "sd": 3.664382
+              },
+              "round_ood_fraction": {
+                "mean": 0.0125,
+                "sd": 0.039528
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0375,
+                "sd": 0.052705
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.977,
+                "sd": 0.059264
+              },
+              "simple_regret": {
+                "mean": 0.021,
+                "sd": 0.059712
+              },
+              "round_ood_fraction": {
+                "mean": 0.0375,
+                "sd": 0.060381
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0375,
+                "sd": 0.045854
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.0625,
+                "sd": 0.088388
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.04375,
+                "sd": 0.033593
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.025,
+                "sd": 0.052705
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.04,
+                "sd": 0.035746
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0375,
+                "sd": 0.060381
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.039583,
+                "sd": 0.031748
+              }
+            }
+          ]
+        },
+        "unconstrained_conformal_ucb": {
+          "method": "unconstrained_conformal_ucb",
+          "final_best_so_far": {
+            "mean": 99.996,
+            "sd": 0.008433
+          },
+          "final_simple_regret": {
+            "mean": 0.002,
+            "sd": 0.006325
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.11875,
+            "sd": 0.107605
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 97.131,
+                "sd": 5.659591
+              },
+              "simple_regret": {
+                "mean": 2.867,
+                "sd": 5.660646
+              },
+              "round_ood_fraction": {
+                "mean": 0.225,
+                "sd": 0.248607
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.225,
+                "sd": 0.248607
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 98.801,
+                "sd": 3.651859
+              },
+              "simple_regret": {
+                "mean": 1.197,
+                "sd": 3.652479
+              },
+              "round_ood_fraction": {
+                "mean": 0.1125,
+                "sd": 0.181142
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.16875,
+                "sd": 0.193313
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.96,
+                "sd": 0.079303
+              },
+              "simple_regret": {
+                "mean": 0.038,
+                "sd": 0.075248
+              },
+              "round_ood_fraction": {
+                "mean": 0.1375,
+                "sd": 0.137563
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.158333,
+                "sd": 0.159329
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.05,
+                "sd": 0.087401
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.13125,
+                "sd": 0.117667
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.175,
+                "sd": 0.222049
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.14,
+                "sd": 0.125388
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.0125,
+                "sd": 0.039528
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.11875,
+                "sd": 0.107605
+              }
+            }
+          ]
+        },
+        "tr_conformal_ucb": {
+          "method": "tr_conformal_ucb",
+          "final_best_so_far": {
+            "mean": 99.998,
+            "sd": 0.006325
+          },
+          "final_simple_regret": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 97.283,
+                "sd": 5.568984
+              },
+              "simple_regret": {
+                "mean": 2.715,
+                "sd": 5.569996
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 98.837,
+                "sd": 3.663684
+              },
+              "simple_regret": {
+                "mean": 1.161,
+                "sd": 3.664382
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.979,
+                "sd": 0.059712
+              },
+              "simple_regret": {
+                "mean": 0.019,
+                "sd": 0.060083
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        },
+        "tr_conformal_ei": {
+          "method": "tr_conformal_ei",
+          "final_best_so_far": {
+            "mean": 99.998,
+            "sd": 0.006325
+          },
+          "final_simple_regret": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 96.912,
+                "sd": 5.543552
+              },
+              "simple_regret": {
+                "mean": 3.086,
+                "sd": 5.544786
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        },
+        "gp_ei": {
+          "method": "gp_ei",
+          "final_best_so_far": {
+            "mean": 99.998,
+            "sd": 0.006325
+          },
+          "final_simple_regret": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.129167,
+            "sd": 0.104767
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 99.764,
+                "sd": 0.29908
+              },
+              "simple_regret": {
+                "mean": 0.234,
+                "sd": 0.299488
+              },
+              "round_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.188654
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.188654
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 99.857,
+                "sd": 0.238935
+              },
+              "simple_regret": {
+                "mean": 0.141,
+                "sd": 0.24016
+              },
+              "round_ood_fraction": {
+                "mean": 0.175,
+                "sd": 0.237171
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.18125,
+                "sd": 0.154364
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.878,
+                "sd": 0.243347
+              },
+              "simple_regret": {
+                "mean": 0.12,
+                "sd": 0.244359
+              },
+              "round_ood_fraction": {
+                "mean": 0.1375,
+                "sd": 0.190485
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.166667,
+                "sd": 0.149588
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.996,
+                "sd": 0.008433
+              },
+              "simple_regret": {
+                "mean": 0.002,
+                "sd": 0.006325
+              },
+              "round_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.222439
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.171875,
+                "sd": 0.148232
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0375,
+                "sd": 0.084369
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.145,
+                "sd": 0.132183
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.05,
+                "sd": 0.120761
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.129167,
+                "sd": 0.104767
+              }
+            }
+          ]
+        },
+        "lightgbm_cqr_ucb": {
+          "method": "lightgbm_cqr_ucb",
+          "final_best_so_far": {
+            "mean": 99.998,
+            "sd": 0.006325
+          },
+          "final_simple_regret": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.345833,
+            "sd": 0.1285
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 97.76,
+                "sd": 5.960021
+              },
+              "simple_regret": {
+                "mean": 2.238,
+                "sd": 5.960788
+              },
+              "round_ood_fraction": {
+                "mean": 0.3875,
+                "sd": 0.303052
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.3875,
+                "sd": 0.303052
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 98.517,
+                "sd": 4.355727
+              },
+              "simple_regret": {
+                "mean": 1.481,
+                "sd": 4.356391
+              },
+              "round_ood_fraction": {
+                "mean": 0.2125,
+                "sd": 0.317597
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.3,
+                "sd": 0.280748
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.979,
+                "sd": 0.059712
+              },
+              "simple_regret": {
+                "mean": 0.019,
+                "sd": 0.053427
+              },
+              "round_ood_fraction": {
+                "mean": 0.325,
+                "sd": 0.229734
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.308333,
+                "sd": 0.203367
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.3125,
+                "sd": 0.313194
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.309375,
+                "sd": 0.146168
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.4375,
+                "sd": 0.359639
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.335,
+                "sd": 0.149629
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.4,
+                "sd": 0.394405
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.345833,
+                "sd": 0.1285
+              }
+            }
+          ]
+        },
+        "lightgbm_cqr_tr_ucb": {
+          "method": "lightgbm_cqr_tr_ucb",
+          "final_best_so_far": {
+            "mean": 99.998,
+            "sd": 0.006325
+          },
+          "final_simple_regret": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 99.958,
+                "sd": 0.078429
+              },
+              "simple_regret": {
+                "mean": 0.04,
+                "sd": 0.074386
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 99.979,
+                "sd": 0.059712
+              },
+              "simple_regret": {
+                "mean": 0.019,
+                "sd": 0.053427
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.998,
+                "sd": 0.006325
+              },
+              "simple_regret": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "dataset_id": "buchwald_hartwig_doyle",
+      "target_unit": "yield_pct",
+      "objective_direction": "maximize",
+      "data_source": "real_csv",
+      "encoding": "onehot_morgan",
+      "distance_metric": "mahalanobis",
+      "split_fractions": [
+        0.1,
+        0.6,
+        0.15,
+        0.15
+      ],
+      "n_clean": 4312,
+      "n_seeds": 10,
+      "rounds": 6,
+      "batch_size": 8,
+      "lowest_mean_regret_method": "lightgbm_cqr_tr_ucb",
+      "methods_within_1se_of_best_regret": [
+        "lightgbm_cqr_tr_ucb",
+        "lightgbm_cqr_ucb"
+      ],
+      "lowest_regret_trust_region_safe_method": "lightgbm_cqr_tr_ucb",
+      "methods": {
+        "random": {
+          "method": "random",
+          "final_best_so_far": {
+            "mean": 91.085322,
+            "sd": 3.521833
+          },
+          "final_simple_regret": {
+            "mean": 8.818116,
+            "sd": 3.6187
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.20625,
+            "sd": 0.060101
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 77.079413,
+                "sd": 13.774884
+              },
+              "simple_regret": {
+                "mean": 22.824024,
+                "sd": 13.790656
+              },
+              "round_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.17873
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.17873
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 84.955717,
+                "sd": 8.674762
+              },
+              "simple_regret": {
+                "mean": 14.94772,
+                "sd": 8.60211
+              },
+              "round_ood_fraction": {
+                "mean": 0.225,
+                "sd": 0.129099
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2125,
+                "sd": 0.094097
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 86.247537,
+                "sd": 7.626654
+              },
+              "simple_regret": {
+                "mean": 13.6559,
+                "sd": 7.525522
+              },
+              "round_ood_fraction": {
+                "mean": 0.2125,
+                "sd": 0.195878
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2125,
+                "sd": 0.106592
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 89.083388,
+                "sd": 5.30203
+              },
+              "simple_regret": {
+                "mean": 10.82005,
+                "sd": 5.096144
+              },
+              "round_ood_fraction": {
+                "mean": 0.1875,
+                "sd": 0.121478
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.20625,
+                "sd": 0.080956
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 90.78716,
+                "sd": 3.534464
+              },
+              "simple_regret": {
+                "mean": 9.116278,
+                "sd": 3.573698
+              },
+              "round_ood_fraction": {
+                "mean": 0.175,
+                "sd": 0.120761
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.084984
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 91.085322,
+                "sd": 3.521833
+              },
+              "simple_regret": {
+                "mean": 8.818116,
+                "sd": 3.6187
+              },
+              "round_ood_fraction": {
+                "mean": 0.2375,
+                "sd": 0.137563
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.20625,
+                "sd": 0.060101
+              }
+            }
+          ]
+        },
+        "greedy": {
+          "method": "greedy",
+          "final_best_so_far": {
+            "mean": 99.695135,
+            "sd": 0.285358
+          },
+          "final_simple_regret": {
+            "mean": 0.208302,
+            "sd": 0.181379
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.06875,
+            "sd": 0.048163
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 98.302802,
+                "sd": 1.866545
+              },
+              "simple_regret": {
+                "mean": 1.600635,
+                "sd": 1.884211
+              },
+              "round_ood_fraction": {
+                "mean": 0.1125,
+                "sd": 0.109449
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.1125,
+                "sd": 0.109449
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 99.464978,
+                "sd": 0.401173
+              },
+              "simple_regret": {
+                "mean": 0.438459,
+                "sd": 0.402234
+              },
+              "round_ood_fraction": {
+                "mean": 0.125,
+                "sd": 0.117851
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.11875,
+                "sd": 0.074826
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.625701,
+                "sd": 0.236791
+              },
+              "simple_regret": {
+                "mean": 0.277736,
+                "sd": 0.149791
+              },
+              "round_ood_fraction": {
+                "mean": 0.05,
+                "sd": 0.120761
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.095833,
+                "sd": 0.062268
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.657047,
+                "sd": 0.264826
+              },
+              "simple_regret": {
+                "mean": 0.24639,
+                "sd": 0.172553
+              },
+              "round_ood_fraction": {
+                "mean": 0.0125,
+                "sd": 0.039528
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.075,
+                "sd": 0.051455
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.657047,
+                "sd": 0.264826
+              },
+              "simple_regret": {
+                "mean": 0.24639,
+                "sd": 0.172553
+              },
+              "round_ood_fraction": {
+                "mean": 0.0625,
+                "sd": 0.088388
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0725,
+                "sd": 0.054582
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.695135,
+                "sd": 0.285358
+              },
+              "simple_regret": {
+                "mean": 0.208302,
+                "sd": 0.181379
+              },
+              "round_ood_fraction": {
+                "mean": 0.05,
+                "sd": 0.120761
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.06875,
+                "sd": 0.048163
+              }
+            }
+          ]
+        },
+        "unconstrained_conformal_ucb": {
+          "method": "unconstrained_conformal_ucb",
+          "final_best_so_far": {
+            "mean": 99.726481,
+            "sd": 0.30109
+          },
+          "final_simple_regret": {
+            "mean": 0.176956,
+            "sd": 0.188146
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.125,
+            "sd": 0.099187
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 99.024135,
+                "sd": 0.760456
+              },
+              "simple_regret": {
+                "mean": 0.879302,
+                "sd": 0.699846
+              },
+              "round_ood_fraction": {
+                "mean": 0.3625,
+                "sd": 0.345858
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.3625,
+                "sd": 0.345858
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 99.580057,
+                "sd": 0.368645
+              },
+              "simple_regret": {
+                "mean": 0.323381,
+                "sd": 0.334753
+              },
+              "round_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.264837
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.28125,
+                "sd": 0.258954
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.580057,
+                "sd": 0.368645
+              },
+              "simple_regret": {
+                "mean": 0.323381,
+                "sd": 0.334753
+              },
+              "round_ood_fraction": {
+                "mean": 0.075,
+                "sd": 0.134371
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2125,
+                "sd": 0.182627
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.657047,
+                "sd": 0.264826
+              },
+              "simple_regret": {
+                "mean": 0.24639,
+                "sd": 0.172553
+              },
+              "round_ood_fraction": {
+                "mean": 0.0625,
+                "sd": 0.088388
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.175,
+                "sd": 0.140683
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.695135,
+                "sd": 0.285358
+              },
+              "simple_regret": {
+                "mean": 0.208302,
+                "sd": 0.181379
+              },
+              "round_ood_fraction": {
+                "mean": 0.025,
+                "sd": 0.052705
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.145,
+                "sd": 0.11535
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.726481,
+                "sd": 0.30109
+              },
+              "simple_regret": {
+                "mean": 0.176956,
+                "sd": 0.188146
+              },
+              "round_ood_fraction": {
+                "mean": 0.025,
+                "sd": 0.052705
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.125,
+                "sd": 0.099187
+              }
+            }
+          ]
+        },
+        "tr_conformal_ucb": {
+          "method": "tr_conformal_ucb",
+          "final_best_so_far": {
+            "mean": 99.726481,
+            "sd": 0.30109
+          },
+          "final_simple_regret": {
+            "mean": 0.176956,
+            "sd": 0.188146
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 98.43221,
+                "sd": 1.935453
+              },
+              "simple_regret": {
+                "mean": 1.471227,
+                "sd": 1.945372
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 98.974509,
+                "sd": 1.371639
+              },
+              "simple_regret": {
+                "mean": 0.928928,
+                "sd": 1.409781
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.541968,
+                "sd": 0.338914
+              },
+              "simple_regret": {
+                "mean": 0.361469,
+                "sd": 0.314953
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.580057,
+                "sd": 0.368645
+              },
+              "simple_regret": {
+                "mean": 0.323381,
+                "sd": 0.334753
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.726481,
+                "sd": 0.30109
+              },
+              "simple_regret": {
+                "mean": 0.176956,
+                "sd": 0.188146
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.726481,
+                "sd": 0.30109
+              },
+              "simple_regret": {
+                "mean": 0.176956,
+                "sd": 0.188146
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        },
+        "tr_conformal_ei": {
+          "method": "tr_conformal_ei",
+          "final_best_so_far": {
+            "mean": 99.278257,
+            "sd": 0.898131
+          },
+          "final_simple_regret": {
+            "mean": 0.625181,
+            "sd": 0.814619
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 96.404499,
+                "sd": 4.22185
+              },
+              "simple_regret": {
+                "mean": 3.498938,
+                "sd": 4.277567
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 98.382502,
+                "sd": 1.296023
+              },
+              "simple_regret": {
+                "mean": 1.520935,
+                "sd": 1.314852
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 98.594306,
+                "sd": 1.321042
+              },
+              "simple_regret": {
+                "mean": 1.309132,
+                "sd": 1.322447
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 98.97412,
+                "sd": 0.829911
+              },
+              "simple_regret": {
+                "mean": 0.929317,
+                "sd": 0.781648
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.005466,
+                "sd": 0.864987
+              },
+              "simple_regret": {
+                "mean": 0.897972,
+                "sd": 0.814677
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.278257,
+                "sd": 0.898131
+              },
+              "simple_regret": {
+                "mean": 0.625181,
+                "sd": 0.814619
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        },
+        "gp_ei": {
+          "method": "gp_ei",
+          "final_best_so_far": {
+            "mean": 96.618391,
+            "sd": 7.432468
+          },
+          "final_simple_regret": {
+            "mean": 3.285047,
+            "sd": 7.4735
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.127083,
+            "sd": 0.049545
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 89.355896,
+                "sd": 10.945499
+              },
+              "simple_regret": {
+                "mean": 10.547542,
+                "sd": 11.008683
+              },
+              "round_ood_fraction": {
+                "mean": 0.25,
+                "sd": 0.102062
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.25,
+                "sd": 0.102062
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 92.550894,
+                "sd": 9.560293
+              },
+              "simple_regret": {
+                "mean": 7.352543,
+                "sd": 9.628063
+              },
+              "round_ood_fraction": {
+                "mean": 0.15,
+                "sd": 0.079057
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2,
+                "sd": 0.049301
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 95.213835,
+                "sd": 7.012733
+              },
+              "simple_regret": {
+                "mean": 4.689603,
+                "sd": 7.064521
+              },
+              "round_ood_fraction": {
+                "mean": 0.1,
+                "sd": 0.114867
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.166667,
+                "sd": 0.043921
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 95.953447,
+                "sd": 7.290672
+              },
+              "simple_regret": {
+                "mean": 3.949991,
+                "sd": 7.329682
+              },
+              "round_ood_fraction": {
+                "mean": 0.125,
+                "sd": 0.144338
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.15625,
+                "sd": 0.0625
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 96.587045,
+                "sd": 7.417267
+              },
+              "simple_regret": {
+                "mean": 3.316392,
+                "sd": 7.458833
+              },
+              "round_ood_fraction": {
+                "mean": 0.075,
+                "sd": 0.06455
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.14,
+                "sd": 0.057975
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 96.618391,
+                "sd": 7.432468
+              },
+              "simple_regret": {
+                "mean": 3.285047,
+                "sd": 7.4735
+              },
+              "round_ood_fraction": {
+                "mean": 0.0625,
+                "sd": 0.121478
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.127083,
+                "sd": 0.049545
+              }
+            }
+          ]
+        },
+        "lightgbm_cqr_ucb": {
+          "method": "lightgbm_cqr_ucb",
+          "final_best_so_far": {
+            "mean": 99.795915,
+            "sd": 0.316961
+          },
+          "final_simple_regret": {
+            "mean": 0.107522,
+            "sd": 0.174097
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.1625,
+            "sd": 0.158297
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 98.209222,
+                "sd": 1.93052
+              },
+              "simple_regret": {
+                "mean": 1.694215,
+                "sd": 1.999299
+              },
+              "round_ood_fraction": {
+                "mean": 0.3875,
+                "sd": 0.392862
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.3875,
+                "sd": 0.392862
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 98.991526,
+                "sd": 1.403303
+              },
+              "simple_regret": {
+                "mean": 0.911911,
+                "sd": 1.439339
+              },
+              "round_ood_fraction": {
+                "mean": 0.1375,
+                "sd": 0.199391
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.2625,
+                "sd": 0.261539
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.34454,
+                "sd": 0.6316
+              },
+              "simple_regret": {
+                "mean": 0.558897,
+                "sd": 0.65239
+              },
+              "round_ood_fraction": {
+                "mean": 0.175,
+                "sd": 0.197203
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.233333,
+                "sd": 0.210819
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.509809,
+                "sd": 0.436676
+              },
+              "simple_regret": {
+                "mean": 0.393628,
+                "sd": 0.42652
+              },
+              "round_ood_fraction": {
+                "mean": 0.1625,
+                "sd": 0.243313
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.215625,
+                "sd": 0.19734
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.656233,
+                "sd": 0.410244
+              },
+              "simple_regret": {
+                "mean": 0.247204,
+                "sd": 0.357933
+              },
+              "round_ood_fraction": {
+                "mean": 0.0125,
+                "sd": 0.039528
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.175,
+                "sd": 0.160295
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.795915,
+                "sd": 0.316961
+              },
+              "simple_regret": {
+                "mean": 0.107522,
+                "sd": 0.174097
+              },
+              "round_ood_fraction": {
+                "mean": 0.1,
+                "sd": 0.184466
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.1625,
+                "sd": 0.158297
+              }
+            }
+          ]
+        },
+        "lightgbm_cqr_tr_ucb": {
+          "method": "lightgbm_cqr_tr_ucb",
+          "final_best_so_far": {
+            "mean": 99.802657,
+            "sd": 0.31348
+          },
+          "final_simple_regret": {
+            "mean": 0.10078,
+            "sd": 0.163305
+          },
+          "final_cumulative_ood_fraction": {
+            "mean": 0.0,
+            "sd": 0.0
+          },
+          "rounds": [
+            {
+              "round": 1,
+              "n_acquired_total": 8,
+              "best_so_far": {
+                "mean": 98.604605,
+                "sd": 1.404605
+              },
+              "simple_regret": {
+                "mean": 1.298832,
+                "sd": 1.469139
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 2,
+              "n_acquired_total": 16,
+              "best_so_far": {
+                "mean": 99.414788,
+                "sd": 0.60822
+              },
+              "simple_regret": {
+                "mean": 0.488649,
+                "sd": 0.617699
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 3,
+              "n_acquired_total": 24,
+              "best_so_far": {
+                "mean": 99.452876,
+                "sd": 0.633824
+              },
+              "simple_regret": {
+                "mean": 0.450561,
+                "sd": 0.636538
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 4,
+              "n_acquired_total": 32,
+              "best_so_far": {
+                "mean": 99.733223,
+                "sd": 0.299167
+              },
+              "simple_regret": {
+                "mean": 0.170214,
+                "sd": 0.181103
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 5,
+              "n_acquired_total": 40,
+              "best_so_far": {
+                "mean": 99.802657,
+                "sd": 0.31348
+              },
+              "simple_regret": {
+                "mean": 0.10078,
+                "sd": 0.163305
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            },
+            {
+              "round": 6,
+              "n_acquired_total": 48,
+              "best_so_far": {
+                "mean": 99.802657,
+                "sd": 0.31348
+              },
+              "simple_regret": {
+                "mean": 0.10078,
+                "sd": 0.163305
+              },
+              "round_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              },
+              "cumulative_ood_fraction": {
+                "mean": 0.0,
+                "sd": 0.0
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

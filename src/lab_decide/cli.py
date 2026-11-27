@@ -1,4 +1,4 @@
-"""Command-line interface and ESOL / CALiSol-23 conformal benchmark runner for lab-decide."""
+"""Command-line interface and ESOL / CALiSol-23 / open-registry conformal benchmark runner for lab-decide."""
 from __future__ import annotations
 
 import argparse
@@ -11,13 +11,17 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from lab_decide.acquisition import (
-    TrustRegionAdvisor,
     benchmark_trust_region_bo,
     run_expansion_campaign,
 )
 from lab_decide.calisol import evaluate_calisol_conformal
 from lab_decide.chemistry import ESOL_FEATURES, ESOL_TARGET, featurize_smiles_batch
-from lab_decide.conformal import ConformalTrustModel, fit_and_calibrate, summarize
+from lab_decide.conformal import (
+    ConformalTrustModel,
+    fit_and_calibrate,
+    spearman_rank_correlation,
+    summarize,
+)
 from lab_decide.data import (
     DatasetBundle,
     load_dataset,
@@ -25,8 +29,10 @@ from lab_decide.data import (
 )
 from lab_decide.datasets import (
     OPEN_CALIBRATION_DATASETS,
+    VALID_HTE_ENCODINGS,
     calibrate_open_dataset,
     default_dataset_cache_path,
+    fetch_open_dataset,
     write_schema_sample_fixture,
 )
 from lab_decide.schema import (
@@ -64,13 +70,15 @@ def run_esol_benchmark(
     per_round: int = 20,
     seed: int = 0,
     nonconformity: str = "normalized",
+    distance_metric: str = "euclidean",
     domain_bounds: tuple[float, float] | None = (-15.0, 1.75),
 ) -> tuple[dict[str, Any], ConformalTrustModel, np.ndarray]:
-    """Run full 4-way split Mondrian conformal + frozen-test active expansion + constrained BO benchmark."""
+    """Run full 4-way split Mondrian conformal + frozen-test active expansion + single-batch ranking."""
     X, y = bundle.X, bundle.y
     splits = partition_splits(
         len(y),
-        smiles=bundle.smiles,
+        smiles=bundle.smiles if split_strategy == "scaffold" else None,
+        groups=bundle.group_keys if split_strategy == "group" else None,
         strategy=split_strategy,
         seed=seed,
         fracs=(0.50, 0.20, 0.15, 0.15),
@@ -88,6 +96,7 @@ def run_esol_benchmark(
         loss="huber",
         nonconformity=nonconformity,
         distance_weighting="importance",
+        distance_metric=distance_metric,
         domain_bounds=domain_bounds,
         feature_names=bundle.feature_names,
     )
@@ -95,18 +104,17 @@ def run_esol_benchmark(
     te_idx = splits.test_idx
     yt = y[te_idx]
 
-    # Marginal split conformal summary on frozen test set
     res_marg = advisor0.predict(X[te_idx], use_mondrian=False)
     all_mask = np.ones(len(te_idx), dtype=bool)
     cov_marg, width_marg, mae_marg = summarize(
         yt, res_marg["lo"], res_marg["hi"], all_mask, pred=res_marg["pred"]
     )
 
-    # Selective Mondrian conformal trust-region summary on frozen test set
     res_mond = advisor0.predict(X[te_idx], use_mondrian=True)
     inside = np.asarray(res_mond["trusted"], dtype=bool)
     c_in, w_in, e_in = summarize(yt, res_mond["lo"], res_mond["hi"], inside, pred=res_mond["pred"])
     c_out, w_out, e_out = summarize(yt, res_mond["lo"], res_mond["hi"], ~inside, pred=res_mond["pred"])
+    spearman_d = spearman_rank_correlation(res_mond["distance"], np.abs(yt - res_mond["pred"]))
 
     history, final_advisor = run_expansion_campaign(
         X,
@@ -125,6 +133,7 @@ def run_esol_benchmark(
         loss="huber",
         nonconformity=nonconformity,
         distance_weighting="importance",
+        distance_metric=distance_metric,
         domain_bounds=domain_bounds,
         feature_names=bundle.feature_names,
     )
@@ -139,6 +148,7 @@ def run_esol_benchmark(
 
     target_pct = int(round((1.0 - alpha) * 100))
     summary: dict[str, Any] = {
+        "data_source": bundle.data_source,
         "rows_clean": len(y),
         "rows_raw": bundle.raw_row_count,
         "deduplicated_smiles": bundle.deduplicated_count,
@@ -150,12 +160,16 @@ def run_esol_benchmark(
             "calibration": int(splits.cal_idx.size),
             "test": int(splits.test_idx.size),
         },
+        "achieved_fractions": splits.achieved_fractions,
+        "n_groups_total": splits.n_groups_total,
+        "group_counts": splits.group_counts,
         "features": bundle.feature_names,
         "alpha": alpha,
         "target_coverage_pct": target_pct,
         "k": k,
         "trust_pct": trust_pct,
         "nonconformity": nonconformity,
+        "distance_metric": distance_metric,
         "marginal_conformal": {
             "q_marginal": advisor0.q_marginal,
             "coverage": cov_marg,
@@ -167,10 +181,12 @@ def run_esol_benchmark(
             "q_in": advisor0.q_in,
             "answered_fraction": float(np.mean(inside)),
             "abstained_fraction": float(1.0 - np.mean(inside)),
+            "spearman_distance_abs_error": spearman_d,
             "inside": {"n": int(np.sum(inside)), "coverage": c_in, "width": w_in, "mae": e_in},
             "outside": {"n": int(np.sum(~inside)), "coverage": c_out, "width": w_out, "mae": e_out},
         },
         "expansion_rounds": history,
+        "single_batch_trust_region_ranking": bo_summary,
         "constrained_bo": bo_summary,
     }
     return summary, final_advisor, te_idx
@@ -184,16 +200,21 @@ def format_esol_report(summary: Mapping[str, Any]) -> str:
     target_pct = summary["target_coverage_pct"]
     k = summary["k"]
     tpct = int(round(float(summary["trust_pct"])))
+    data_source = summary.get("data_source", "real_csv")
 
     lines: list[str] = []
     lines.append(
-        f"ESOL clean rows: {summary['rows_clean']} (deduped {summary['deduplicated_smiles']} duplicate SMILES) | "
+        f"ESOL clean rows: {summary['rows_clean']} (deduped {summary['deduplicated_smiles']} duplicate SMILES, "
+        f"data_source={data_source}) | "
         f"train {sp['train']} / pool {sp['pool']} / calibration {sp['calibration']} / test {sp['test']}"
     )
     lines.append(f"Features: {', '.join(summary['features'])}")
     lines.append("")
     lines.append(f"== Split conformal (target {target_pct}%, domain-clipped) ==")
-    lines.append(f"Marginal half-width q_all: {_fmt_cell(mc['q_marginal'], 5, 3).strip()} log units | Mondrian inside q_in: {_fmt_cell(tr['q_in'], 5, 3).strip()} log units")
+    lines.append(
+        f"Marginal half-width q_all: {_fmt_cell(mc['q_marginal'], 5, 3).strip()} log units | "
+        f"Mondrian inside q_in: {_fmt_cell(tr['q_in'], 5, 3).strip()} log units"
+    )
     lines.append(
         f"Test coverage: {_fmt_cell(mc['coverage'], 5, 3).strip()} | "
         f"mean interval width: {_fmt_cell(mc['mean_width'], 5, 3).strip()} | "
@@ -239,11 +260,12 @@ def format_esol_report(summary: Mapping[str, Any]) -> str:
         )
     lines.append("")
     lines.append(
-        f"== Trust-region constrained BO (conformal UCB top-10 on pool) ==\n"
+        f"== Single-batch trust-region ranking (conformal UCB top-10 on pool) ==\n"
         f"Constrained top logS: {_fmt_cell(bo['constrained_top_y'], 5, 3).strip()} "
         f"(pred MAE {_fmt_cell(bo['constrained_pred_mae'], 5, 3).strip()}) | "
-        f"Unconstrained greedy pred MAE: {_fmt_cell(bo['unconstrained_pred_mae'], 5, 3).strip()} "
-        f"(OOD frac {_fmt_cell(bo['unconstrained_ood_fraction'], 5, 3).strip()})"
+        f"Unconstrained top logS: {_fmt_cell(bo['unconstrained_top_y'], 5, 3).strip()} "
+        f"(pred MAE {_fmt_cell(bo['unconstrained_pred_mae'], 5, 3).strip()}, "
+        f"OOD frac {_fmt_cell(bo['unconstrained_ood_fraction'], 5, 3).strip()})"
     )
     return "\n".join(lines)
 
@@ -251,7 +273,7 @@ def format_esol_report(summary: Mapping[str, Any]) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lab-decide",
-        description="Conformal trust-region experiment advisor and constrained BO planner.",
+        description="Conformal trust-region experiment advisor and sequential active planner.",
     )
     parser.add_argument("--csv", type=str, default=None, help="Path to custom tabular CSV dataset.")
     dataset_choices = tuple(
@@ -272,9 +294,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target", type=str, default=ESOL_TARGET, help="Target column name.")
     parser.add_argument(
         "--split",
-        choices=("random", "scaffold"),
+        choices=("random", "scaffold", "group"),
         default="random",
-        help="Data split protocol ('random' or Bemis-Murcko 'scaffold').",
+        help="Data split protocol ('random', RDKit Bemis-Murcko 'scaffold', or explicit domain 'group').",
+    )
+    parser.add_argument(
+        "--encoding",
+        choices=VALID_HTE_ENCODINGS,
+        default="descriptors",
+        help="Reaction feature encoding ('descriptors', 'onehot', or 'onehot_morgan').",
+    )
+    parser.add_argument(
+        "--distance-metric",
+        choices=("euclidean", "mahalanobis", "ensemble_mahalanobis"),
+        default="euclidean",
+        help="Applicability-domain distance metric.",
     )
     parser.add_argument(
         "--nonconformity",
@@ -300,7 +334,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Evaluate EpistemicProbeResult JSONL from lab-ask-why and emit DecisionEnvelopes.",
     )
-    parser.add_argument("--offline", action="store_true", help="Disable network downloads; use cached/synthetic data.")
+    parser.add_argument("--offline", action="store_true", help="Disable network downloads; require local cache unless --allow-synthetic is given.")
+    parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        help="Opt-in fallback to deterministic synthetic fixtures when --offline cache is absent.",
+    )
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
     parser.add_argument("--json", action="store_true", help="Shorthand alias for --format json.")
     parser.add_argument(
@@ -342,19 +381,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.dataset == "calisol23":
+            # When --split group or --split random is explicitly requested via the general open-dataset
+            # calibrator, wait: if default --dataset calisol23 is called, use cached/fetched calisol23.csv!
+            resolved_cal_csv = args.csv
+            if resolved_cal_csv is None:
+                cached_cal = default_dataset_cache_path("calisol23")
+                if os.path.exists(cached_cal):
+                    resolved_cal_csv = cached_cal
+                elif not args.offline:
+                    resolved_cal_csv = fetch_open_dataset("calisol23")
+                elif args.allow_synthetic:
+                    resolved_cal_csv = None
+                else:
+                    raise FileNotFoundError(
+                        f"Dataset 'calisol23' is not cached at {cached_cal} and --offline is set "
+                        "(pass --allow-synthetic to use the synthetic fixture)."
+                    )
+
             cal_res = evaluate_calisol_conformal(
-                csv_path=args.csv,
+                csv_path=resolved_cal_csv,
                 alpha=args.alpha,
                 trust_pct=args.trust_pct,
                 seed=args.seed,
                 nonconformity=args.nonconformity,
+                distance_metric=args.distance_metric,
             )
             clean_cal = _json_clean(cal_res)
             if out_fmt == "json":
                 print(json.dumps(clean_cal, indent=2))
             else:
                 print(
-                    f"CALiSol-23 DOI-split conformal ({clean_cal['source']}): "
+                    f"CALiSol-23 DOI-split conformal (data_source={clean_cal['data_source']}): "
                     f"train={clean_cal['n_train']} cal={clean_cal['n_cal']} test={clean_cal['n_test']} | "
                     f"answered={clean_cal['answered_fraction']:.3f} cov_in={clean_cal['cov_in']:.3f} "
                     f"MAE_in={clean_cal['mae_in']:.3f} vs MAE_out={clean_cal['mae_out']:.3f} | "
@@ -366,13 +423,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             import tempfile
 
             resolved_path = args.csv
+            ds_source = "real_csv"
             temp_dir_ctx = None
             try:
                 if resolved_path is None and args.offline:
                     cached = default_dataset_cache_path(args.dataset)
                     if os.path.exists(cached):
                         resolved_path = cached
-                    else:
+                    elif args.allow_synthetic:
                         temp_dir_ctx = tempfile.TemporaryDirectory()
                         ext = OPEN_CALIBRATION_DATASETS[args.dataset].file_format
                         resolved_path = write_schema_sample_fixture(
@@ -380,6 +438,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                             os.path.join(temp_dir_ctx.name, f"sample.{ext}"),
                             n=120,
                             seed=args.seed,
+                        )
+                        ds_source = "synthetic_fixture"
+                    else:
+                        raise FileNotFoundError(
+                            f"Dataset {args.dataset!r} is not cached at {cached} and --offline is set "
+                            "(pass --allow-synthetic to use the synthetic fixture)."
                         )
                 adv_ds, bundle_ds, splits_ds, metrics_ds = calibrate_open_dataset(
                     args.dataset,
@@ -391,6 +455,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     split_strategy=args.split,
                     seed=args.seed,
                     offline=args.offline,
+                    encoding=args.encoding,
+                    distance_metric=args.distance_metric,
+                    data_source=ds_source,
                 )
                 if args.export_decisions:
                     te_envs = build_decision_envelopes(
@@ -405,7 +472,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(json.dumps(clean_m, indent=2))
                 else:
                     print(
-                        f"{clean_m['dataset_id']} ({clean_m['domain']}, {clean_m['spdx_license']}): "
+                        f"{clean_m['dataset_id']} ({clean_m['domain']}, {clean_m['spdx_license']}, "
+                        f"data_source={clean_m['data_source']}): "
                         f"n={clean_m['n_clean']} | answered={clean_m['answered_fraction']:.3f} "
                         f"cov_in={clean_m['cov_in']:.3f} MAE_in={clean_m['mae_in']:.3f} "
                         f"width_in={clean_m['width_in']:.3f} ({clean_m['target_unit']})"
@@ -428,6 +496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 make_synthetic_solubility_dataframe(n=240, seed=args.seed),
                 features=features,
                 target=args.target,
+                data_source="synthetic_fixture",
             )
         else:
             bundle = load_dataset(
@@ -435,6 +504,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 features=features,
                 target=args.target,
                 offline=args.offline,
+                allow_synthetic=args.allow_synthetic,
             )
 
         summary, final_advisor, te_idx = run_esol_benchmark(
@@ -447,6 +517,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             per_round=args.per_round,
             seed=args.seed,
             nonconformity=args.nonconformity,
+            distance_metric=args.distance_metric,
         )
 
         if args.smiles:
@@ -466,7 +537,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for e in envs:
                     print(
                         f"{e.candidate_id} ({e.smiles}): pred={e.prediction:.3f} "
-                        f"[{e.interval_lo:.3f}, {e.interval_hi:.3f}] d={e.knn_distance:.3f} -> {e.decision}"
+                        f"[{e.interval_lo:.3f}, {e.interval_hi:.3f}] d={e.knn_distance:.3f} "
+                        f"data_source={bundle.data_source} -> {e.decision}"
                     )
             return 0
 

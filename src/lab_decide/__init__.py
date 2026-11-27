@@ -1,11 +1,13 @@
-"""lab-decide: Calibrated conformal trust-region experiment advisor & constrained BO."""
+"""lab-decide: Calibrated conformal trust-region experiment advisor & sequential active optimization."""
 from __future__ import annotations
 
 from lab_decide.acquisition import (
+    VALID_CAMPAIGN_METHODS,
     AcquisitionProposal,
     TrustRegionAdvisor,
     benchmark_trust_region_bo,
     run_expansion_campaign,
+    run_sequential_bo_campaign,
     select_diverse_boundary_batch,
 )
 from lab_decide.calisol import (
@@ -22,11 +24,14 @@ from lab_decide.chemistry import (
     ESOL_FEATURES,
     ESOL_TARGET,
     HAS_RDKIT,
+    RDKIT_MOL_EXTRA_FEATURES,
+    canonical_group_smiles,
     compute_scaffold_groups,
     featurize_smiles_batch,
     murcko_scaffold_group,
     normalize_smiles_str,
     smiles_to_descriptors,
+    smiles_to_morgan_physicochem,
 )
 from lab_decide.conformal import (
     ConformalTrustModel,
@@ -35,11 +40,13 @@ from lab_decide.conformal import (
     conformal_rank,
     conformal_threshold,
     fit_and_calibrate,
+    spearman_rank_correlation,
     summarize,
     weighted_conformal_quantile,
     winkler_interval_score,
 )
 from lab_decide.data import (
+    BUNDLED_ESOL_RESOURCE_PATH,
     DEFAULT_DATA_PATH,
     ESOL_SHA256,
     ESOL_URL,
@@ -58,6 +65,8 @@ from lab_decide.datasets import (
     NEW_OPEN_DATASET_IDS_2026,
     OPEN_CALIBRATION_DATASETS,
     VALID_DOMAINS,
+    VALID_HTE_ENCODINGS,
+    VALID_OBJECTIVE_DIRECTIONS,
     OpenCalibrationDataset,
     calibrate_open_dataset,
     default_dataset_cache_path,
@@ -80,6 +89,7 @@ from lab_decide.schema import (
 __all__ = [
     "APPROVED_COMMERCIAL_SPDX_LICENSES",
     "AcquisitionProposal",
+    "BUNDLED_ESOL_RESOURCE_PATH",
     "CALISOL_TEST_DOIS",
     "CALISOL_VAL_DOIS",
     "ConformalTrustModel",
@@ -95,13 +105,18 @@ __all__ = [
     "NEW_OPEN_DATASET_IDS_2026",
     "OPEN_CALIBRATION_DATASETS",
     "OpenCalibrationDataset",
+    "RDKIT_MOL_EXTRA_FEATURES",
     "SplitIndices",
     "TrustRegionAdvisor",
+    "VALID_CAMPAIGN_METHODS",
     "VALID_DOMAINS",
+    "VALID_HTE_ENCODINGS",
+    "VALID_OBJECTIVE_DIRECTIONS",
     "assign_calisol_doi_split",
     "benchmark_trust_region_bo",
     "build_decision_envelopes",
     "calibrate_open_dataset",
+    "canonical_group_smiles",
     "compute_covariate_shift_weights",
     "compute_scaffold_groups",
     "conformal_quantile",
@@ -132,8 +147,11 @@ __all__ = [
     "normalize_smiles_str",
     "partition_splits",
     "run_expansion_campaign",
+    "run_sequential_bo_campaign",
     "select_diverse_boundary_batch",
     "smiles_to_descriptors",
+    "smiles_to_morgan_physicochem",
+    "spearman_rank_correlation",
     "summarize",
     "validate_and_clean_dataframe",
     "weighted_conformal_quantile",

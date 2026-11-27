@@ -1,4 +1,4 @@
-ESOL clean rows: 1123 (deduped 5 duplicate SMILES) | train 561 / pool 224 / calibration 169 / test 169
+ESOL clean rows: 1123 (deduped 5 duplicate SMILES, data_source=real_csv) | train 561 / pool 224 / calibration 169 / test 169
 Features: Minimum Degree, Molecular Weight, Number of H-Bond Donors, Number of Rings, Number of Rotatable Bonds, Polar Surface Area
 
 == Split conformal (target 90%, domain-clipped) ==
@@ -17,5 +17,5 @@ round  train  pool  test  n_in n_out  answered  cov_in  cov_out  cov_all  MAE_in
 1        577   204   169   143    26     0.846   0.930    0.808    0.911   0.629    1.177    2.798
 2        588   190   169   144    25     0.852   0.931    0.840    0.917   0.650    1.270    2.880
 
-== Trust-region constrained BO (conformal UCB top-10 on pool) ==
-Constrained top logS: 1.580 (pred MAE 0.514) | Unconstrained greedy pred MAE: 0.651 (OOD frac 0.200)
+== Single-batch trust-region ranking (conformal UCB top-10 on pool) ==
+Constrained top logS: 1.580 (pred MAE 0.514) | Unconstrained top logS: 1.580 (pred MAE 0.651, OOD frac 0.200)

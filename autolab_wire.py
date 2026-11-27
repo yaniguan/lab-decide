@@ -1,10 +1,14 @@
 """Auto-Lab 15-repository wire node for lab-decide (Layer L6 Calibrated Conformal Decision Gate).
 
-Implements `autolab-wire/v1` packet processing with:
-- Exact rational/integer finite-sample split-conformal order-statistic rank (`LabDecideLean.conformalRank`),
-- Tibshirani-Foygel-Barber likelihood-ratio weighted conformal calibration (`weighted_conformal_quantile`),
-- Descriptor-conditioned locally scaled Conformalized Quantile Regression (`CQR-r`) with `lo <= hi` guard,
-- Canonical 64-hex SHA-256 validation and idempotent `ledger_entry_sha256` deduplication across rounds.
+Implements `autolab-wire/v1` packet processing backed by a frozen `ConformalTrustModel` fitted on
+SHA-256-pinned ESOL (`seed=0`, 4-way split `561/224/169/169`):
+- Exact RDKit 6D descriptor extraction via `smiles_to_descriptors` (failing closed when RDKit or
+  the SHA-verified ESOL CSV is unavailable, or when `candidate_smiles` cannot be parsed),
+- Exact parity with `ConformalTrustModel.predict` on in-domain/out-of-domain gating and intervals,
+- Packet `knn_distance` honored ONLY when `distance_source == "upstream"`,
+- Genuine `(descriptors, measured_y)` / residual calibration updates from SHA-256 deduplicated
+  `certified_ledger_entries` (never widening `effective_threshold` by counting entries or from
+  high-residual measurements).
 """
 from __future__ import annotations
 
@@ -12,12 +16,17 @@ import copy
 import importlib.util
 import json
 import math
+import os
 import re
 import sys
 import warnings
 from collections.abc import Mapping
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 REPO_ID = "lab-decide"
 LAYER = "L6"
@@ -46,42 +55,155 @@ def _load_mondrian_drift_conformal() -> Any:
 
 
 conformal_order_rank = _load_mondrian_drift_conformal().conformal_order_rank
-from lab_decide.chemistry import HAS_RDKIT, murcko_scaffold_group, smiles_to_descriptors  # noqa: E402
-from lab_decide.conformal import conformal_quantile, weighted_conformal_quantile  # noqa: E402
+import lab_decide.chemistry as _chem_mod  # noqa: E402
+from lab_decide.chemistry import ESOL_FEATURES, HAS_RDKIT, smiles_to_descriptors  # noqa: E402
+from lab_decide.conformal import (  # noqa: E402
+    ConformalTrustModel,
+    conformal_quantile,
+    conformal_threshold,
+    fit_and_calibrate,
+    weighted_conformal_quantile,
+)
+from lab_decide.data import (  # noqa: E402
+    ESOL_SHA256,
+    compute_file_sha256,
+    load_dataset,
+    partition_splits,
+)
 
 DEFAULT_CANDIDATE_SMILES = "CC(=O)Oc1ccccc1C(=O)O"
 PHYS_MIN_LOGS = -15.0
 PHYS_MAX_LOGS = 1.75
-CERTIFIED_THRESHOLD_STEP = 0.02
-DEFAULT_MAX_THRESHOLD_EXPANSION = 0.20
-CQR_SCALE_FLOOR = 0.05
 _SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+_DEFAULT_ESOL_CANDIDATE_PATHS: tuple[Path, ...] = (
+    REPO_DIR / "data" / "delaney-processed.csv",
+    REPO_DIR / "src" / "lab_decide" / "resources" / "delaney-processed.csv",
+)
+
+
+@dataclass(frozen=True)
+class _FrozenEsolState:
+    advisor: ConformalTrustModel
+    csv_path: str
+    X_cal: np.ndarray
+    y_cal: np.ndarray
+    d_cal: np.ndarray
+    pred_cal: np.ndarray
+    scores_cal: np.ndarray
+
+
+def _resolve_verified_esol_csv(explicit_path: str | None = None) -> str:
+    """Resolve a local ESOL CSV verified against `ESOL_SHA256` without performing network I/O."""
+    env_override = os.environ.get("LAB_DECIDE_ESOL_CSV", "").strip()
+    target_explicit = explicit_path.strip() if isinstance(explicit_path, str) and explicit_path.strip() else env_override
+
+    if target_explicit:
+        p = Path(target_explicit)
+        if not p.is_file():
+            raise FileNotFoundError(
+                f"ESOL calibration CSV is not cached at {p}; cannot certify L6 conformal gate offline."
+            )
+        digest = compute_file_sha256(str(p))
+        if digest.lower() != ESOL_SHA256.lower():
+            raise RuntimeError(
+                f"ESOL calibration CSV at {p} failed SHA-256 verification (expected {ESOL_SHA256}, got {digest})."
+            )
+        return str(p.resolve())
+
+    for cand in _DEFAULT_ESOL_CANDIDATE_PATHS:
+        if cand.is_file():
+            digest = compute_file_sha256(str(cand))
+            if digest.lower() == ESOL_SHA256.lower():
+                return str(cand.resolve())
+
+    searched = ", ".join(str(p) for p in _DEFAULT_ESOL_CANDIDATE_PATHS)
+    raise FileNotFoundError(
+        f"ESOL calibration CSV is not cached locally (checked: {searched}) with SHA-256 {ESOL_SHA256}."
+    )
+
+
+@lru_cache(maxsize=8)
+def _load_frozen_esol_state(resolved_csv_path: str) -> _FrozenEsolState:
+    """Fit and cache the canonical seed-0 ESOL `ConformalTrustModel` on SHA-pinned CSV."""
+    digest = compute_file_sha256(resolved_csv_path)
+    if digest.lower() != ESOL_SHA256.lower():
+        raise RuntimeError(
+            f"ESOL CSV {resolved_csv_path} failed SHA-256 check (expected {ESOL_SHA256}, got {digest})."
+        )
+    bundle = load_dataset(csv_path=resolved_csv_path, offline=True)
+    splits = partition_splits(
+        len(bundle.y),
+        strategy="random",
+        seed=0,
+        fracs=(0.50, 0.20, 0.15, 0.15),
+    )
+    X_tr = bundle.X[splits.train_idx]
+    y_tr = bundle.y[splits.train_idx]
+    X_cal = bundle.X[splits.cal_idx]
+    y_cal = bundle.y[splits.cal_idx]
+
+    advisor = fit_and_calibrate(
+        X_tr,
+        y_tr,
+        X_cal,
+        y_cal,
+        alpha=0.10,
+        k=5,
+        trust_pct=80.0,
+        seed=0,
+        loss="huber",
+        nonconformity="normalized",
+        distance_weighting="importance",
+        domain_bounds=(PHYS_MIN_LOGS, PHYS_MAX_LOGS),
+        feature_names=bundle.feature_names,
+    )
+    d_cal = advisor.distance(X_cal)
+    pred_cal = np.asarray(advisor.model.predict(X_cal), dtype=np.float64)
+    scores_cal = np.abs(y_cal - pred_cal) / (1.0 + advisor.gamma * d_cal)
+    return _FrozenEsolState(
+        advisor=advisor,
+        csv_path=resolved_csv_path,
+        X_cal=X_cal,
+        y_cal=y_cal,
+        d_cal=d_cal,
+        pred_cal=pred_cal,
+        scores_cal=scores_cal,
+    )
+
+
+def get_cached_esol_model(esol_csv_path: str | None = None) -> ConformalTrustModel:
+    """Public accessor returning the cached seed-0 SHA-pinned ESOL `ConformalTrustModel`."""
+    resolved = _resolve_verified_esol_csv(esol_csv_path)
+    return _load_frozen_esol_state(resolved).advisor
+
+
+def _rdkit_available() -> bool:
+    return bool(HAS_RDKIT and _chem_mod.HAS_RDKIT)
 
 
 def _extract_certified_entry_keys(entry: Any) -> tuple[str, str | None] | None:
-    """Validate a `lab-attrib` ledger entry and return `(primary_dedup_key, optional_run_key)`.
-
-    Accepts entries where `admit_to_memory` is not `False` and either:
-    1. `ledger_entry_sha256` is a canonical 64-character hex SHA-256 digest, OR
-    2. `ledger_entry_sha256` is omitted/`None`, `admit_to_memory is True`, and a non-empty
-       unique `run_id` / `entry_id` / `ledger_id` string is supplied.
-    Rejects malformed SHA-256 strings, anonymous digest-free dicts, and non-finite residuals/weights.
-    """
+    """Validate a `lab-attrib` ledger entry and return `(primary_dedup_key, optional_run_key)`."""
     if not isinstance(entry, Mapping):
         return None
     if entry.get("admit_to_memory") is False:
         return None
 
-    if "calibration_residual" in entry and entry["calibration_residual"] is not None:
-        try:
-            res_val = float(entry["calibration_residual"])
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(res_val):
-            return None
+    for num_key in ("calibration_residual", "measured_y", "measured_log_s", "observed_y"):
+        if num_key in entry and entry[num_key] is not None:
+            if isinstance(entry[num_key], bool):
+                return None
+            try:
+                val = float(entry[num_key])
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(val):
+                return None
 
     for w_key in ("likelihood_ratio_weight", "importance_weight"):
         if w_key in entry and entry[w_key] is not None:
+            if isinstance(entry[w_key], bool):
+                return None
             try:
                 w_val = float(entry[w_key])
             except (TypeError, ValueError):
@@ -106,11 +228,6 @@ def _extract_certified_entry_keys(entry: Any) -> tuple[str, str | None] | None:
         return (run_key, None)
 
     return None
-
-
-def _is_valid_certified_entry(entry: Any) -> bool:
-    """Return True iff `entry` carries a valid 64-hex SHA-256 or explicit `admit_to_memory=True` with unique ID."""
-    return _extract_certified_entry_keys(entry) is not None
 
 
 def _deduplicate_certified_entries(
@@ -139,136 +256,131 @@ def _deduplicate_certified_entries(
     return deduped, dup_count, invalid_count
 
 
-def _extract_esol_descriptors(smiles: str, override: Any = None) -> dict[str, float]:
-    """Compute or fall back to deterministic 6D ESOL descriptors for heteroscedastic CQR-r."""
-    if isinstance(override, Mapping):
+def _featurize_entry_descriptors(entry: Mapping[str, Any]) -> np.ndarray | None:
+    """Extract 6D ESOL descriptor vector for a ledger entry strictly via explicit dict or RDKit."""
+    desc_map = entry.get("candidate_descriptors")
+    if isinstance(desc_map, Mapping) and all(f in desc_map for f in ESOL_FEATURES):
         try:
-            return {
-                "Minimum Degree": float(override.get("Minimum Degree", 1.0)),
-                "Molecular Weight": max(12.0, float(override["Molecular Weight"])),
-                "Number of H-Bond Donors": max(0.0, float(override.get("Number of H-Bond Donors", 0.0))),
-                "Number of Rings": max(0.0, float(override.get("Number of Rings", 0.0))),
-                "Number of Rotatable Bonds": max(0.0, float(override.get("Number of Rotatable Bonds", 0.0))),
-                "Polar Surface Area": max(0.0, float(override.get("Polar Surface Area", 0.0))),
-            }
-        except (KeyError, TypeError, ValueError):
-            pass
+            vec = np.asarray([float(desc_map[f]) for f in ESOL_FEATURES], dtype=np.float64)
+            if np.all(np.isfinite(vec)):
+                return vec
+        except (TypeError, ValueError):
+            return None
 
-    if HAS_RDKIT:
+    smi = entry.get("candidate_smiles")
+    if isinstance(smi, str) and smi.strip() and _rdkit_available():
         try:
-            return smiles_to_descriptors(smiles)
+            d = smiles_to_descriptors(smi)
+            return np.asarray([float(d[f]) for f in ESOL_FEATURES], dtype=np.float64)
         except (ValueError, ImportError):
-            pass
-
-    clean = smiles.strip()
-    scaffold_sig = murcko_scaffold_group(clean)
-    ring_hint = float(sum(1 for ch in scaffold_sig if ch.isdigit()) // 2)
-    polar_atoms = sum(1 for ch in clean if ch in "ONon")
-    hbd_hint = float(clean.count("O") + clean.count("N")) * 0.4
-    mw_est = max(30.0, 14.0 * max(1, len(clean)))
-    return {
-        "Minimum Degree": 2.0 if ring_hint > 0 and "(" not in clean else 1.0,
-        "Molecular Weight": mw_est,
-        "Number of H-Bond Donors": hbd_hint,
-        "Number of Rings": ring_hint,
-        "Number of Rotatable Bonds": float(max(0, clean.count("CC") - 1)),
-        "Polar Surface Area": 16.0 * polar_atoms,
-    }
+            return None
+    return None
 
 
-def _estimate_descriptor_quantile_band(
-    smiles: str,
-    *,
-    alpha: float = 0.10,
-    descriptor_override: Any = None,
-    point_override: float | None = None,
-) -> tuple[float, float, float, float]:
-    """Return `(point_pred, q_lo_raw, q_hi_raw, spread)` conditioned on 6D chemical descriptors.
+def _extract_entry_calibration_observation(
+    entry: Mapping[str, Any],
+    advisor: ConformalTrustModel,
+) -> tuple[float, float, float, bool] | None:
+    """Return `(d_entry, norm_score, lr_weight, has_descriptors)` for a measured ledger entry.
 
-    Models heteroscedastic solubility dispersion and crystal-packing lower-tail asymmetry:
-    high-MW, multi-ring hydrophobic polycycles exhibit substantially wider and more negatively
-    skewed conditional quantile bands than low-MW polar alcohols at identical kNN distance.
+    Returns `None` when the entry carries neither a measured target (`measured_y` / `measured_log_s`
+    / `observed_y`) nor an explicit `calibration_residual`.
     """
-    desc = _extract_esol_descriptors(smiles, override=descriptor_override)
-    mw = desc["Molecular Weight"]
-    rings = desc["Number of Rings"]
-    rot = desc["Number of Rotatable Bonds"]
-    hbd = desc["Number of H-Bond Donors"]
-    tpsa = desc["Polar Surface Area"]
-
-    if point_override is not None and math.isfinite(float(point_override)):
-        point_pred = float(point_override)
+    x_vec = _featurize_entry_descriptors(entry)
+    has_desc = x_vec is not None
+    if x_vec is not None:
+        d_entry = float(advisor.distance(x_vec)[0])
+        pred_entry = float(advisor.model.predict(x_vec.reshape(1, -1))[0])
+    elif (
+        entry.get("distance_source") == "upstream"
+        and "knn_distance" in entry
+        and entry["knn_distance"] is not None
+    ):
+        d_entry = float(entry["knn_distance"])
+        pred_entry = float("nan")
     else:
-        est = 0.25 - 0.010 * mw - 0.35 * rings - 0.08 * rot + 0.006 * tpsa
-        point_pred = float(max(-12.0, min(0.8, est)))
+        d_entry = 0.0
+        pred_entry = float("nan")
 
-    # Local heteroscedastic dispersion grows with MW, ring packing complexity, and rotor flexibility,
-    # and contracts slightly for small hydrogen-bonding polar solutes.
-    alpha_eff = min(max(float(alpha), 1e-4), 0.9999) if math.isfinite(float(alpha)) else 0.10
-    level_scale = max(0.25, math.sqrt(max(0.05, 1.0 - alpha_eff) / 0.90))
+    measured_val: float | None = None
+    for y_key in ("measured_y", "measured_log_s", "observed_y"):
+        if y_key in entry and entry[y_key] is not None:
+            measured_val = float(entry[y_key])
+            break
 
-    mw_term = 0.22 * max(0.0, (mw - 60.0) / 150.0)
-    ring_term = 0.18 * rings
-    rot_term = 0.04 * rot
-    polar_relief = min(0.12, 0.015 * hbd + 0.0008 * tpsa)
-    base_half = max(0.20, (0.28 + mw_term + ring_term + rot_term - polar_relief) * level_scale)
+    if measured_val is not None and has_desc and math.isfinite(pred_entry):
+        raw_res = abs(measured_val - pred_entry)
+    elif "calibration_residual" in entry and entry["calibration_residual"] is not None:
+        raw_res = abs(float(entry["calibration_residual"]))
+    else:
+        return None
 
-    # Crystal-packing polymorphism creates heavier lower solubility tails on multi-ring compounds
-    lower_skew = 1.0 + 0.12 * min(rings, 5.0) + 0.04 * max(0.0, (mw - 200.0) / 150.0)
-    upper_skew = max(0.75, 1.0 - 0.04 * min(rings, 4.0))
+    norm_score = raw_res / (1.0 + advisor.gamma * max(d_entry, 0.0))
 
-    lo_span = base_half * lower_skew
-    hi_span = base_half * upper_skew
-    q_lo_raw = point_pred - lo_span
-    q_hi_raw = point_pred + hi_span
-    spread = max(q_hi_raw - q_lo_raw, CQR_SCALE_FLOOR)
-    return point_pred, q_lo_raw, q_hi_raw, spread
-
-
-def _estimate_point_solubility_logs(smiles: str) -> float:
-    """Deterministic ESOL-scale point estimate in log10(mol/L) without network I/O."""
-    point_pred, _, _, _ = _estimate_descriptor_quantile_band(smiles)
-    return point_pred
-
-
-def _build_calibration_cqr_r_scores(n_samples: int) -> list[float]:
-    """Build deterministic locally scaled CQR-r calibration nonconformity scores of length `n_samples`.
-
-    Scores represent `(max(q_lo - y, y - q_hi)) / max(q_hi - q_lo, CQR_SCALE_FLOOR)`: negative on
-    well-covered interior compounds (~80%) and positive on tail calibration compounds (~20%).
-    """
-    if n_samples <= 0:
-        return []
-    return [round(-0.35 + 1.15 * ((idx + 0.5) / n_samples), 6) for idx in range(n_samples)]
-
-
-def _entry_cqr_r_score(entry: Mapping[str, Any], alpha: float) -> float:
-    """Convert a certified ledger entry's measurement residual into a locally scaled CQR-r score."""
-    if "cqr_r_score" in entry and entry["cqr_r_score"] is not None:
-        return float(entry["cqr_r_score"])
-    raw_res = abs(float(entry.get("calibration_residual", 0.32)))
-    entry_smi = str(entry.get("candidate_smiles") or DEFAULT_CANDIDATE_SMILES)
-    _, q_lo_e, q_hi_e, spread_e = _estimate_descriptor_quantile_band(entry_smi, alpha=alpha)
-    half_band = 0.5 * (q_hi_e - q_lo_e)
-    return round((raw_res - half_band) / max(spread_e, CQR_SCALE_FLOOR), 6)
-
-
-def _entry_likelihood_ratio_weight(entry: Mapping[str, Any], base_threshold: float) -> tuple[float, bool]:
-    """Return `(weight, is_explicit)` for covariate-shifted active boundary picks."""
+    weight = 1.0
     for w_key in ("likelihood_ratio_weight", "importance_weight"):
         if w_key in entry and entry[w_key] is not None:
-            return float(entry[w_key]), True
-    if "knn_distance" in entry and entry["knn_distance"] is not None and base_threshold > 0.0:
-        d_ent = float(entry["knn_distance"])
-        if math.isfinite(d_ent) and d_ent > base_threshold:
-            # Defensive outer-shell Radon-Nikodym weight w(x) in (0, 1)
-            shell_excess = (d_ent - base_threshold) / max(base_threshold, 1e-6)
-            return 1.0 / (1.0 + shell_excess), False
-    return 1.0, False
+            weight = float(entry[w_key])
+            break
+    return d_entry, norm_score, weight, has_desc
+
+
+def _emit_fail_closed_abstain(
+    out: dict[str, Any],
+    *,
+    candidate_smiles: str,
+    distance_source: str,
+    reason_code: str,
+    detail: str,
+    knn_distance: float | None = None,
+    effective_threshold: float | None = None,
+    effective_n_calib: int = 0,
+    duplicate_ignored: int = 0,
+    invalid_ignored: int = 0,
+) -> dict[str, Any]:
+    out["halted"] = True
+    out["halt_reason"] = "L6_ABSTAIN"
+    out["decision"] = {
+        "candidate_smiles": candidate_smiles,
+        "in_trust_region": False,
+        "abstain": True,
+        "abstain_reason": reason_code,
+        "distance_source": distance_source,
+        "knn_distance": round(float(knn_distance), 6) if (knn_distance is not None and math.isfinite(knn_distance)) else None,
+        "effective_threshold": round(float(effective_threshold), 6) if (effective_threshold is not None and math.isfinite(effective_threshold)) else None,
+        "effective_n_calib": int(effective_n_calib),
+        "predicted_log_s": None,
+        "conformal_interval": [PHYS_MIN_LOGS, PHYS_MAX_LOGS],
+        "nonconformity": "normalized",
+        "duplicate_ledger_entries_ignored": duplicate_ignored,
+        "invalid_ledger_entries_ignored": invalid_ignored,
+    }
+    summary = f"Conformal decision gate abstained ({reason_code}: {detail})."
+    out["trace"].append(
+        {
+            "repo": REPO_ID,
+            "layer": LAYER,
+            "status": "ABSTAIN",
+            "summary": summary,
+        }
+    )
+    out["bottom_reasoning_traces"].append(
+        {
+            "repo": REPO_ID,
+            "layer": LAYER,
+            "invariant": "out_of_domain_always_abstains",
+            "first_principles": (
+                "Layer L6 conformal gating fails closed whenever RDKit descriptor parsing, "
+                "SHA-256 verified ESOL calibration data, finite-sample conformal rank, or "
+                "kNN applicability-domain membership cannot be certified."
+            ),
+        }
+    )
+    return out
 
 
 def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
-    """Validate and enrich an `autolab-wire/v1` packet at the L6 conformal decision gate."""
+    """Validate and score an `autolab-wire/v1` packet with the frozen SHA-pinned ESOL model."""
     out: dict[str, Any] = copy.deepcopy(dict(packet)) if packet is not None else {}
     out.setdefault("schema_version", SCHEMA_VERSION)
     out.setdefault("halted", False)
@@ -279,108 +391,243 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
     if bool(out["halted"]):
         return out
 
-    candidate_smiles = str(out.get("candidate_smiles", DEFAULT_CANDIDATE_SMILES))
+    raw_smiles = out.get("candidate_smiles", DEFAULT_CANDIDATE_SMILES)
+    candidate_smiles = raw_smiles if isinstance(raw_smiles, str) else str(raw_smiles or "")
     out.setdefault("candidate_smiles", candidate_smiles)
-    knn_distance = float(out.get("knn_distance", 0.412))
-    base_threshold = float(out.get("knn_threshold", 0.758))
-    base_n_calib = int(out.get("n_calib", 226))
-    alpha = float(out.get("alpha", 0.10))
-    test_weight = float(out.get("test_weight", 1.0))
-    max_thr_exp = max(0.0, float(out.get("max_threshold_expansion", DEFAULT_MAX_THRESHOLD_EXPANSION)))
 
     raw_certified = out.get("certified_ledger_entries", [])
-    if isinstance(raw_certified, (list, tuple)):
-        certified_entries = list(raw_certified)
-    else:
-        certified_entries = []
-
+    certified_entries = list(raw_certified) if isinstance(raw_certified, (list, tuple)) else []
     valid_certified, duplicate_ignored, invalid_ignored = _deduplicate_certified_entries(certified_entries)
-    effective_n_calib = base_n_calib + len(valid_certified)
 
-    cert_weights_info = [_entry_likelihood_ratio_weight(e, base_threshold) for e in valid_certified]
-    cert_raw_weights = [w for w, _ in cert_weights_info]
-    has_explicit_entry_w = any(is_exp for _, is_exp in cert_weights_info)
+    req_dist_source = out.get("distance_source")
+    use_upstream_dist = (
+        req_dist_source == "upstream"
+        and "knn_distance" in out
+        and out["knn_distance"] is not None
+    )
+    distance_source = "upstream" if use_upstream_dist else "fitted_esol_model"
 
-    effective_cert_mass = sum(min(w, 1.0) for w in cert_raw_weights)
-    thr_delta = min(max_thr_exp, CERTIFIED_THRESHOLD_STEP * effective_cert_mass)
-    effective_threshold = round(base_threshold + thr_delta, 4)
+    # 1. Fail closed if RDKit is missing or candidate_smiles does not parse as a valid molecule
+    if not _rdkit_available():
+        return _emit_fail_closed_abstain(
+            out,
+            candidate_smiles=candidate_smiles,
+            distance_source=distance_source,
+            reason_code="rdkit_unavailable",
+            detail="RDKit is required to compute ESOL 6D descriptors for L6 conformal gating",
+            duplicate_ignored=duplicate_ignored,
+            invalid_ignored=invalid_ignored,
+        )
 
-    base_scores = _build_calibration_cqr_r_scores(max(0, base_n_calib))
-    certified_scores = [_entry_cqr_r_score(entry, alpha) for entry in valid_certified]
-    cqr_scores = base_scores + certified_scores
+    try:
+        if not isinstance(raw_smiles, str) or not raw_smiles.strip():
+            raise ValueError("candidate_smiles must be a non-empty SMILES string")
+        cand_desc = smiles_to_descriptors(candidate_smiles)
+        x_cand = np.asarray([float(cand_desc[f]) for f in ESOL_FEATURES], dtype=np.float64)
+    except (ValueError, ImportError) as exc:
+        return _emit_fail_closed_abstain(
+            out,
+            candidate_smiles=candidate_smiles,
+            distance_source=distance_source,
+            reason_code="invalid_candidate_smiles",
+            detail=str(exc),
+            duplicate_ignored=duplicate_ignored,
+            invalid_ignored=invalid_ignored,
+        )
 
-    explicit_cal_w = out.get("cal_weights")
-    if isinstance(explicit_cal_w, (list, tuple)) and len(explicit_cal_w) == len(cqr_scores):
-        cal_weights = [float(w) for w in explicit_cal_w]
+    # 2. Load SHA-256 verified ESOL frozen model offline; fail closed if cache is missing/corrupt
+    explicit_csv = out.get("esol_csv_path")
+    try:
+        resolved_csv = _resolve_verified_esol_csv(
+            str(explicit_csv) if explicit_csv is not None else None
+        )
+        state = _load_frozen_esol_state(resolved_csv)
+    except (FileNotFoundError, RuntimeError, ValueError, OSError) as exc:
+        return _emit_fail_closed_abstain(
+            out,
+            candidate_smiles=candidate_smiles,
+            distance_source=distance_source,
+            reason_code="esol_cache_unavailable",
+            detail=str(exc),
+            duplicate_ignored=duplicate_ignored,
+            invalid_ignored=invalid_ignored,
+        )
+
+    advisor = state.advisor
+
+    try:
+        alpha = float(out.get("alpha", advisor.alpha))
+        test_weight = float(out.get("test_weight", 1.0))
+    except (TypeError, ValueError) as exc:
+        return _emit_fail_closed_abstain(
+            out,
+            candidate_smiles=candidate_smiles,
+            distance_source=distance_source,
+            reason_code="invalid_alpha_or_weight",
+            detail=str(exc),
+            effective_threshold=advisor.threshold,
+            effective_n_calib=int(state.scores_cal.size),
+            duplicate_ignored=duplicate_ignored,
+            invalid_ignored=invalid_ignored,
+        )
+
+    if use_upstream_dist:
+        try:
+            raw_d = out["knn_distance"]
+            if isinstance(raw_d, bool):
+                raise ValueError("knn_distance must be numeric, not bool")
+            knn_distance = float(raw_d)
+        except (TypeError, ValueError) as exc:
+            return _emit_fail_closed_abstain(
+                out,
+                candidate_smiles=candidate_smiles,
+                distance_source=distance_source,
+                reason_code="invalid_upstream_distance",
+                detail=str(exc),
+                effective_threshold=advisor.threshold,
+                effective_n_calib=int(state.scores_cal.size),
+                duplicate_ignored=duplicate_ignored,
+                invalid_ignored=invalid_ignored,
+            )
     else:
-        raw_weights = [1.0] * max(0, base_n_calib) + cert_raw_weights
-        if raw_weights and not has_explicit_entry_w and sum(raw_weights) > 0.0:
-            # Self-normalize automatic shell weights to mean 1.0 so sample-size rank gates remain exact
-            mean_w = sum(raw_weights) / float(len(raw_weights))
-            cal_weights = [w / mean_w for w in raw_weights]
+        knn_distance = float(advisor.distance(x_cand)[0])
+
+    # Extract genuine calibration observations from deduplicated certified ledger entries
+    measured_obs: list[tuple[float, float, float, bool]] = []
+    unmeasured_ignored = 0
+    for entry in valid_certified:
+        obs = _extract_entry_calibration_observation(entry, advisor)
+        if obs is None:
+            unmeasured_ignored += 1
         else:
-            cal_weights = raw_weights
+            measured_obs.append(obs)
 
     alpha_valid = math.isfinite(alpha) and (0.0 < alpha < 1.0)
-    weights_valid = (
-        len(cal_weights) == effective_n_calib
-        and all(math.isfinite(w) and w >= 0.0 for w in cal_weights)
-        and math.isfinite(test_weight)
-        and test_weight > 0.0
-    )
-    if effective_n_calib > 0 and alpha_valid and len(cqr_scores) == effective_n_calib and weights_valid:
+    weight_valid = math.isfinite(test_weight) and test_weight > 0.0
+
+    # Fast-path exact parity with ConformalTrustModel.predict when using unaltered frozen ESOL state
+    if (
+        not measured_obs
+        and not use_upstream_dist
+        and alpha_valid
+        and math.isclose(alpha, advisor.alpha, rel_tol=0.0, abs_tol=1e-12)
+        and weight_valid
+        and math.isclose(test_weight, 1.0, rel_tol=0.0, abs_tol=1e-12)
+        and "n_calib_override" not in out
+    ):
+        pred_1d = advisor.predict(x_cand, use_mondrian=True)
+        abstain = not bool(pred_1d["trusted"])
+        low = float(pred_1d["lo"])
+        high = float(pred_1d["hi"])
+        point_pred = float(pred_1d["pred"])
+        effective_threshold = float(advisor.threshold)
+        effective_n_calib = int(state.scores_cal.size)
         rank_k = conformal_order_rank(effective_n_calib, alpha)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            if all(w == 1.0 for w in cal_weights) and test_weight == 1.0:
-                q_hat = conformal_quantile(cqr_scores, alpha=alpha)
+        rank_ok = True
+    else:
+        # Support optional n_calib_override in tests exercising small-sample rank abstention
+        base_n = int(out.get("n_calib_override", state.scores_cal.size))
+        base_n = max(0, min(base_n, int(state.scores_cal.size)))
+        d_base = state.d_cal[:base_n]
+        s_base = state.scores_cal[:base_n]
+
+        obs_d = np.asarray([o[0] for o in measured_obs], dtype=np.float64)
+        obs_s = np.asarray([o[1] for o in measured_obs], dtype=np.float64)
+        obs_w = np.asarray([o[2] for o in measured_obs], dtype=np.float64)
+
+        all_d = np.concatenate([d_base, obs_d]) if measured_obs else d_base
+        all_s = np.concatenate([s_base, obs_s]) if measured_obs else s_base
+        all_w = (
+            np.concatenate([np.ones(base_n, dtype=np.float64), obs_w])
+            if measured_obs
+            else np.ones(base_n, dtype=np.float64)
+        )
+        effective_n_calib = int(all_s.size)
+
+        # Threshold recomputation: NEVER count entries; entries whose nonconformity score exceeds
+        # the current inside quantile `advisor.q_in` MUST NOT widen the trust region!
+        eligible_thr_d = [
+            o[0] for o in measured_obs if o[3] and (o[1] <= advisor.q_in)
+        ]
+        if base_n == 0:
+            effective_threshold = float("inf")
+        elif eligible_thr_d:
+            d_for_thr = np.concatenate([d_base, np.asarray(eligible_thr_d, dtype=np.float64)])
+            effective_threshold = conformal_threshold(d_for_thr, trust_pct=advisor.trust_pct)
+        else:
+            effective_threshold = (
+                float(advisor.threshold)
+                if base_n == int(state.scores_cal.size)
+                else conformal_threshold(d_base, trust_pct=advisor.trust_pct)
+            )
+
+        if effective_n_calib > 0 and alpha_valid and weight_valid:
+            rank_k = conformal_order_rank(effective_n_calib, alpha)
+            use_unit_w = bool(np.all(all_w == 1.0) and test_weight == 1.0)
+
+            def _q_eval(sub_s: np.ndarray, sub_w: np.ndarray) -> float:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)
+                    if use_unit_w:
+                        return conformal_quantile(sub_s, alpha=alpha)
+                    return weighted_conformal_quantile(
+                        sub_s, sub_w, alpha=alpha, test_weight=test_weight
+                    )
+
+            q_marg = _q_eval(all_s, all_w)
+            in_mask = all_d <= effective_threshold
+            if int(np.sum(in_mask)) > 0:
+                q_in_raw = _q_eval(all_s[in_mask], all_w[in_mask])
+                if math.isfinite(q_in_raw):
+                    q_in_eff = q_in_raw
+                elif math.isfinite(q_marg):
+                    q_in_eff = float(max(q_marg, float(np.max(all_s[in_mask]))))
+                else:
+                    q_in_eff = float("inf")
             else:
-                q_hat = weighted_conformal_quantile(
-                    cqr_scores, cal_weights, alpha=alpha, test_weight=test_weight
-                )
-    else:
-        rank_k = max(1, effective_n_calib + 1)
-        q_hat = float("inf")
+                q_in_eff = q_marg if math.isfinite(q_marg) else float("inf")
 
-    # Lean invariants (`LabDecideLean.checkDecide`):
-    # (a) Finite-sample conformal rank `rank_k <= effective_n_calib` and finite weighted quantile
-    # (b) Applicability-domain gate `knn_distance <= effective_threshold`
-    rank_ok = alpha_valid and effective_n_calib > 0 and (rank_k <= effective_n_calib) and math.isfinite(q_hat)
-    domain_ok = (
-        math.isfinite(knn_distance)
-        and math.isfinite(effective_threshold)
-        and knn_distance >= 0.0
-        and effective_threshold > 0.0
-        and (knn_distance <= effective_threshold)
-    )
-    abstain = not (rank_ok and domain_ok)
+            out_mask = ~in_mask
+            if int(np.sum(out_mask)) > 0:
+                q_out_cand = _q_eval(all_s[out_mask], all_w[out_mask])
+                q_out_eff = q_out_cand if math.isfinite(q_out_cand) else q_marg
+            else:
+                q_out_eff = q_marg
+        else:
+            rank_k = max(1, effective_n_calib + 1)
+            q_marg = q_in_eff = q_out_eff = float("inf")
 
-    raw_pred_override = out.get("predicted_log_s")
-    point_override = float(raw_pred_override) if raw_pred_override is not None else None
-    point_pred, q_lo_raw, q_hi_raw, desc_spread = _estimate_descriptor_quantile_band(
-        candidate_smiles,
-        alpha=alpha if alpha_valid else 0.10,
-        descriptor_override=out.get("candidate_descriptors"),
-        point_override=point_override,
-    )
+        const_viol = bool(advisor._constant_invariant_violated(x_cand.reshape(1, -1))[0])
+        domain_ok = (
+            math.isfinite(knn_distance)
+            and math.isfinite(effective_threshold)
+            and knn_distance >= 0.0
+            and effective_threshold > 0.0
+            and (knn_distance <= effective_threshold)
+            and (not const_viol)
+        )
+        q_used = q_in_eff if domain_ok else q_out_eff
+        rank_ok = (
+            alpha_valid
+            and weight_valid
+            and effective_n_calib > 0
+            and (rank_k <= effective_n_calib)
+            and math.isfinite(q_used)
+        )
+        abstain = not (rank_ok and domain_ok)
 
-    if math.isfinite(q_hat) and math.isfinite(knn_distance) and knn_distance >= 0.0:
-        local_scale = desc_spread * (1.0 + 0.25 * knn_distance)
-        lo_cand = q_lo_raw - q_hat * local_scale
-        hi_cand = q_hi_raw + q_hat * local_scale
-        # Monotonic crossing guard (`LabDecideLean.interval_well_ordered`: `lo <= hi`)
-        if lo_cand > hi_cand:
-            mid = 0.5 * (q_lo_raw + q_hi_raw)
-            lo_cand = mid
-            hi_cand = mid
-        lo_clipped = max(PHYS_MIN_LOGS, min(PHYS_MAX_LOGS, lo_cand))
-        hi_clipped = max(lo_clipped, min(PHYS_MAX_LOGS, hi_cand))
-        low = round(lo_clipped, 4)
-        high = round(max(low, hi_clipped), 4)
-    else:
-        local_scale = float("nan")
-        low = PHYS_MIN_LOGS
-        high = PHYS_MAX_LOGS
+        raw_pred = float(advisor.model.predict(x_cand.reshape(1, -1))[0])
+        if math.isfinite(q_used) and math.isfinite(knn_distance) and knn_distance >= 0.0:
+            half = max(q_used, 0.0) * (1.0 + advisor.gamma * knn_distance)
+            lo_c = max(PHYS_MIN_LOGS, min(PHYS_MAX_LOGS, raw_pred - half))
+            hi_c = max(lo_c, min(PHYS_MAX_LOGS, raw_pred + half))
+            low = float(lo_c)
+            high = float(hi_c)
+            point_pred = float(max(low, min(high, max(PHYS_MIN_LOGS, min(PHYS_MAX_LOGS, raw_pred)))))
+        else:
+            low = PHYS_MIN_LOGS
+            high = PHYS_MAX_LOGS
+            point_pred = float(max(PHYS_MIN_LOGS, min(PHYS_MAX_LOGS, raw_pred)))
 
     if abstain:
         out["halted"] = True
@@ -390,32 +637,39 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
         "candidate_smiles": candidate_smiles,
         "in_trust_region": not abstain,
         "abstain": abstain,
+        "distance_source": distance_source,
         "knn_distance": knn_distance,
-        "effective_threshold": effective_threshold,
+        "effective_threshold": effective_threshold if math.isfinite(effective_threshold) else None,
         "effective_n_calib": effective_n_calib,
+        "predicted_log_s": point_pred,
         "conformal_interval": [low, high],
-        "nonconformity": "cqr_r",
+        "nonconformity": advisor.nonconformity,
+        "certified_calibration_added": len(measured_obs),
+        "unmeasured_ledger_entries_ignored": unmeasured_ignored,
         "duplicate_ledger_entries_ignored": duplicate_ignored,
         "invalid_ledger_entries_ignored": invalid_ignored,
     }
 
     if abstain:
+        thr_str = f"{effective_threshold:.4f}" if math.isfinite(effective_threshold) else "inf"
         detail = (
             f"rank_k={rank_k} > effective_n_calib={effective_n_calib} or insufficient weighted mass"
             if not rank_ok
-            else f"knn_distance={knn_distance:.4f} > effective_threshold={effective_threshold:.4f}"
+            else f"knn_distance={knn_distance:.4f} > effective_threshold={thr_str}"
         )
         summary = (
             f"Conformal decision gate abstained ({detail}; "
-            f"certified_recalibration_count={len(valid_certified)}, "
+            f"distance_source={distance_source}, "
+            f"certified_recalibration_count={len(measured_obs)}, "
             f"duplicates_ignored={duplicate_ignored})."
         )
     else:
         summary = (
             f"Conformal decision gate passed (knn_distance={knn_distance:.4f} <= "
-            f"effective_threshold={effective_threshold:.4f}, rank={rank_k}/{effective_n_calib}, "
-            f"cqr_r_interval=[{low:.4f}, {high:.4f}], "
-            f"certified_recalibration_count={len(valid_certified)}, "
+            f"effective_threshold={effective_threshold:.4f}, distance_source={distance_source}, "
+            f"rank={rank_k}/{effective_n_calib}, "
+            f"interval=[{low:.4f}, {high:.4f}], "
+            f"certified_recalibration_count={len(measured_obs)}, "
             f"duplicates_ignored={duplicate_ignored})."
         )
 
@@ -433,12 +687,12 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
             "layer": LAYER,
             "invariant": "out_of_domain_always_abstains",
             "first_principles": (
-                "Distribution-free locally scaled CQR-r coverage at level (1 - alpha) requires "
-                "exact rational finite-sample rank ceil((n + 1) * (1 - alpha)) <= n without "
-                "clamping, likelihood-ratio covariate reweighting, and kNN support membership "
-                "d_kNN(x) <= tau; deduplicated 64-hex SHA-256 certified ledger entries from "
-                "lab-attrib recalibrate effective_n_calib and effective_threshold idempotently "
-                "only after causal blame verification blocks execution and spectral artifacts."
+                "Distribution-free Mondrian normalized split-conformal coverage at level (1 - alpha) "
+                "scores candidate SMILES with the SHA-256-pinned ESOL ConformalTrustModel, enforcing "
+                "exact rational finite-sample rank ceil((n + 1) * (1 - alpha)) <= n without clamping "
+                "and kNN applicability-domain membership d_kNN(x) <= tau; certified ledger observations "
+                "(descriptors, measured_y) recompute nonconformity quantiles and never widen tau on "
+                "unmeasured or high-residual entries."
             ),
         }
     )
