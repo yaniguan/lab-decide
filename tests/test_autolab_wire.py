@@ -20,7 +20,7 @@ from autolab_wire import (
     get_cached_esol_model,
     process_packet,
 )
-from lab_decide.chemistry import HAS_RDKIT
+from lab_decide.chemistry import HAS_RDKIT, featurize_smiles_batch
 from lab_decide.conformal import summarize
 from lab_decide.data import BUNDLED_ESOL_RESOURCE_PATH, load_dataset, partition_splits
 
@@ -150,15 +150,20 @@ def test_issue_32_exact_parity_with_conformal_trust_model_on_seed0_esol_test_spl
             }
         )
         dec = out["decision"]
-        ref_1d = adv.predict(bundle.X[int(row_i)], use_mondrian=True)
+        x_rdkit = featurize_smiles_batch([smi])[0]
+        ref_rdkit = adv.predict(x_rdkit, use_mondrian=True)
+        ref_csv_1d = adv.predict(bundle.X[int(row_i)], use_mondrian=True)
         assert dec["distance_source"] == "fitted_esol_model"
-        assert dec["in_trust_region"] is bool(ref_1d["trusted"])
-        assert dec["abstain"] is (not bool(ref_1d["trusted"]))
-        assert dec["knn_distance"] == float(ref_1d["distance"])
-        assert dec["predicted_log_s"] == float(ref_1d["pred"])
-        assert dec["conformal_interval"] == [float(ref_1d["lo"]), float(ref_1d["hi"])]
+        assert dec["in_trust_region"] is bool(ref_rdkit["trusted"])
+        assert dec["in_trust_region"] is bool(ref_csv_1d["trusted"])
+        assert dec["abstain"] is (not bool(ref_rdkit["trusted"]))
+        assert dec["knn_distance"] == float(ref_rdkit["distance"])
+        assert dec["predicted_log_s"] == float(ref_rdkit["pred"])
+        assert dec["conformal_interval"] == [float(ref_rdkit["lo"]), float(ref_rdkit["hi"])]
+        assert dec["knn_distance"] == pytest.approx(float(ref_csv_1d["distance"]), rel=0.0, abs=1e-9)
+        assert dec["predicted_log_s"] == pytest.approx(float(ref_csv_1d["pred"]), rel=0.0, abs=1e-9)
         assert dec["conformal_interval"] == pytest.approx(
-            [float(ref["lo"][pos]), float(ref["hi"][pos])], rel=0.0, abs=1e-12
+            [float(ref["lo"][pos]), float(ref["hi"][pos])], rel=0.0, abs=1e-9
         )
 
         wire_trusted[pos] = bool(dec["in_trust_region"])

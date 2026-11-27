@@ -65,6 +65,7 @@ lab-decide/
 ├── scripts/
 │   ├── benchmark_campaign.py         # Multi-round closed-loop BO benchmark (GP-EI, LightGBM+CQR, TrustRegionAdvisor)
 │   ├── benchmark_registry.py         # 11-dataset multi-seed conformal & HTE encoding ablation runner
+│   ├── check_lean_axioms.py          # Lean 4 #print axioms verifier (zero sorryAx / custom axioms)
 │   ├── fetch_open_datasets.py        # On-demand atomic downloader, live URL checker & calibrator
 │   └── sync_readme.py                # Deterministic README table synchronizer & drift checker
 ├── src/lab_decide/                   # Installable package & SHA-pinned ESOL reference asset
