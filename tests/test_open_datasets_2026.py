@@ -383,9 +383,18 @@ def test_fetch_open_datasets_atomic_download_and_cli(
                 fetch_open_dataset("freesolv", data_dir=bad_dir, force=True)
         assert list(bad_dir.glob("*.part*")) == []
 
-    # 4. Main lab-decide CLI --dataset <new_id> --offline --json works out of the box
-    rc_cli = cli_main(["--dataset", "aqsoldb", "--offline", "--json"])
-    assert rc_cli == 0
-    cli_payload = json.loads(capsys.readouterr().out)
-    assert cli_payload["dataset_id"] == "aqsoldb"
-    assert cli_payload["spdx_license"] == "CC0-1.0"
+    # 4. Main lab-decide CLI --offline fails closed without cache unless --allow-synthetic is given
+    with mock.patch(
+        "lab_decide.cli.default_dataset_cache_path",
+        return_value=str(tmp_path / "uncached_aqsoldb.csv"),
+    ):
+        rc_fail = cli_main(["--dataset", "aqsoldb", "--offline", "--json"])
+        assert rc_fail != 0
+        capsys.readouterr()
+
+        rc_cli = cli_main(["--dataset", "aqsoldb", "--offline", "--allow-synthetic", "--json"])
+        assert rc_cli == 0
+        cli_payload = json.loads(capsys.readouterr().out)
+        assert cli_payload["dataset_id"] == "aqsoldb"
+        assert cli_payload["spdx_license"] == "CC0-1.0"
+        assert cli_payload["data_source"] == "synthetic_fixture"

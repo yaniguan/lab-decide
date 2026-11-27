@@ -28,10 +28,19 @@ from lab_decide.calisol import (
     featurize_calisol_records,
     load_calisol_csv_records,
 )
-from lab_decide.chemistry import ESOL_FEATURES, ESOL_TARGET
+from lab_decide.chemistry import (
+    ESOL_FEATURES,
+    ESOL_TARGET,
+    HAS_RDKIT,
+    RDKIT_MOL_EXTRA_FEATURES,
+    canonical_group_smiles,
+    compute_scaffold_groups,
+    smiles_to_morgan_physicochem,
+)
 from lab_decide.conformal import (
     ConformalTrustModel,
     fit_and_calibrate,
+    spearman_rank_correlation,
     summarize,
     winkler_interval_score,
 )
@@ -54,6 +63,18 @@ VALID_DOMAINS: tuple[str, ...] = (
     "electrolyte_solvation",
     "admet",
     "reaction_optimization",
+)
+
+VALID_OBJECTIVE_DIRECTIONS: tuple[str, ...] = (
+    "maximize",
+    "minimize",
+    "calibration_only",
+)
+
+VALID_HTE_ENCODINGS: tuple[str, ...] = (
+    "descriptors",
+    "onehot",
+    "onehot_morgan",
 )
 
 APPROVED_COMMERCIAL_SPDX_LICENSES: frozenset[str] = frozenset(
@@ -176,6 +197,8 @@ class OpenCalibrationDataset:
     domain_bounds: tuple[float, float] | None = None
     expected_sha256: str | None = None
     leakage_excluded_columns: tuple[str, ...] = ()
+    objective_direction: str = "maximize"
+    group_kind: str = "murcko_scaffold"
 
     def __post_init__(self) -> None:
         if not _DATASET_ID_RE.fullmatch(self.dataset_id):
@@ -184,6 +207,13 @@ class OpenCalibrationDataset:
             raise ValueError(
                 f"Invalid domain {self.domain!r} for {self.dataset_id}; expected one of {VALID_DOMAINS}"
             )
+        if self.objective_direction not in VALID_OBJECTIVE_DIRECTIONS:
+            raise ValueError(
+                f"Invalid objective_direction {self.objective_direction!r} for {self.dataset_id}; "
+                f"expected one of {VALID_OBJECTIVE_DIRECTIONS}"
+            )
+        if not self.group_kind or not self.group_kind.strip():
+            raise ValueError(f"group_kind must be non-empty for {self.dataset_id}")
         if not self.target_unit or not self.target_unit.strip():
             raise ValueError(f"target_unit must be non-empty for {self.dataset_id}")
         if int(self.n_records) <= 0:
@@ -231,6 +261,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         domain_bounds=(-15.0, 1.75),
         expected_sha256=ESOL_SHA256,
         leakage_excluded_columns=("ESOL predicted log solubility in mols per litre",),
+        objective_direction="maximize",
+        group_kind="murcko_scaffold",
     ),
     "aqsoldb": OpenCalibrationDataset(
         dataset_id="aqsoldb",
@@ -249,6 +281,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         domain_bounds=(-15.0, 2.0),
         expected_sha256="7c47e021d03a5720f53cfddb7aef90c8911ea276a36306c839798733d8630332",
         leakage_excluded_columns=("SD", "Ocurrences", "Group"),
+        objective_direction="maximize",
+        group_kind="murcko_scaffold",
     ),
     "bigsoldb_v2_2": OpenCalibrationDataset(
         dataset_id="bigsoldb_v2_2",
@@ -271,6 +305,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
             "Solubility(mol/L)",
             "LogS(mole_fraction)",
         ),
+        objective_direction="maximize",
+        group_kind="solute",
     ),
     "calisol23": OpenCalibrationDataset(
         dataset_id="calisol23",
@@ -289,6 +325,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         domain_bounds=(0.0, 6.0),
         expected_sha256="af560531c6b0d7ea0848581120f5f08a725c510bba8cbc3ae84c6b89ae32993f",
         leakage_excluded_columns=(),
+        objective_direction="maximize",
+        group_kind="doi",
     ),
     "freesolv": OpenCalibrationDataset(
         dataset_id="freesolv",
@@ -316,6 +354,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
             "d_h_solv",
             "calc_s (cal/mol.K)",
         ),
+        objective_direction="calibration_only",
+        group_kind="murcko_scaffold",
     ),
     "lipophilicity_astrazeneca": OpenCalibrationDataset(
         dataset_id="lipophilicity_astrazeneca",
@@ -334,6 +374,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         domain_bounds=(-3.0, 6.0),
         expected_sha256="aed41590cb30609d51d8e08ad3ff06495a76e80e211358801f596b10da69bacd",
         leakage_excluded_columns=(),
+        objective_direction="calibration_only",
+        group_kind="murcko_scaffold",
     ),
     "biogen_adme": OpenCalibrationDataset(
         dataset_id="biogen_adme",
@@ -354,6 +396,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         leakage_excluded_columns=tuple(
             c for c in BIOGEN_ALL_ASSAY_COLUMNS if c != "LOG HLM_CLint (mL/min/kg)"
         ),
+        objective_direction="minimize",
+        group_kind="murcko_scaffold",
     ),
     "buchwald_hartwig_doyle": OpenCalibrationDataset(
         dataset_id="buchwald_hartwig_doyle",
@@ -372,6 +416,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         domain_bounds=(0.0, 100.0),
         expected_sha256="cce1da58d63c0c8f4245e8490b5ec58f0321c6556932842adb5f3ef11a185e12",
         leakage_excluded_columns=("plate", "row", "col", "aryl_halide_number", "additive_number"),
+        objective_direction="maximize",
+        group_kind="aryl_halide",
     ),
     "suzuki_miyaura_perera": OpenCalibrationDataset(
         dataset_id="suzuki_miyaura_perera",
@@ -390,6 +436,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         domain_bounds=(0.0, 100.0),
         expected_sha256="d2acd54d3958a5369346177834e6c2b16388813bb28b105181a252a15c4a79a8",
         leakage_excluded_columns=("Unnamed: 0",),
+        objective_direction="maximize",
+        group_kind="substrate",
     ),
     "direct_arylation_shields": OpenCalibrationDataset(
         dataset_id="direct_arylation_shields",
@@ -408,6 +456,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         domain_bounds=(0.0, 100.0),
         expected_sha256="0aac33253d799c2e5f978b2962c34f9b57ba4863dae408721cabe8fa815d74ea",
         leakage_excluded_columns=("entry",),
+        objective_direction="maximize",
+        group_kind="ligand",
     ),
     "bh_hte_ood_2026": OpenCalibrationDataset(
         dataset_id="bh_hte_ood_2026",
@@ -426,6 +476,8 @@ OPEN_CALIBRATION_DATASETS: dict[str, OpenCalibrationDataset] = {
         domain_bounds=(0.0, 115.0),
         expected_sha256="247473787c33fb22ee48a4177593188f2a2c6ef140756566fe4610fee89ba333",
         leakage_excluded_columns=("labels", "DRFP", "DRFP_subst_prod", "QM"),
+        objective_direction="maximize",
+        group_kind="aryl_halide",
     ),
 }
 
@@ -769,6 +821,9 @@ def _finalize_feature_bundle(
     dropped_nonfinite: int,
     deduplicate: bool = True,
     min_rows: int = 4,
+    group_keys: list[str] | None = None,
+    group_kind: str = "murcko_scaffold",
+    data_source: str = "real_csv",
 ) -> DatasetBundle:
     if not X_rows:
         raise ValueError(
@@ -781,10 +836,13 @@ def _finalize_feature_bundle(
     row_finite = np.isfinite(X_arr).all(axis=1) & np.isfinite(y_arr)
     extra_nonfinite = int(np.sum(~row_finite))
     if extra_nonfinite > 0:
+        ok_list = row_finite.tolist()
         X_arr = X_arr[row_finite]
         y_arr = y_arr[row_finite]
-        keys = [k for k, ok in zip(keys, row_finite.tolist()) if ok]
-        comp_ids = [cid for cid, ok in zip(comp_ids, row_finite.tolist()) if ok]
+        keys = [k for k, ok in zip(keys, ok_list) if ok]
+        comp_ids = [cid for cid, ok in zip(comp_ids, ok_list) if ok]
+        if group_keys is not None:
+            group_keys = [gk for gk, ok in zip(group_keys, ok_list) if ok]
     total_dropped = dropped_nonfinite + extra_nonfinite
 
     dedup_count = 0
@@ -802,15 +860,19 @@ def _finalize_feature_bundle(
             X_dedup = np.empty((len(order_keys), X_arr.shape[1]), dtype=np.float64)
             y_dedup = np.empty(len(order_keys), dtype=np.float64)
             id_dedup: list[str] = []
+            gk_dedup: list[str] | None = [] if group_keys is not None else None
             for out_i, k_str in enumerate(order_keys):
                 member_idx = groups[k_str]
                 X_dedup[out_i] = np.mean(X_arr[member_idx], axis=0)
                 y_dedup[out_i] = float(np.mean(y_arr[member_idx]))
                 id_dedup.append(comp_ids[member_idx[0]])
+                if gk_dedup is not None and group_keys is not None:
+                    gk_dedup.append(group_keys[member_idx[0]])
             X_arr = X_dedup
             y_arr = y_dedup
             keys = order_keys
             comp_ids = id_dedup
+            group_keys = gk_dedup
 
     if len(y_arr) < min_rows:
         raise ValueError(
@@ -828,6 +890,9 @@ def _finalize_feature_bundle(
         raw_row_count=raw_row_count,
         dropped_nonfinite_count=total_dropped,
         deduplicated_count=dedup_count,
+        group_keys=list(group_keys) if group_keys is not None else None,
+        group_kind=group_kind,
+        data_source=data_source,
     )
 
 
@@ -840,8 +905,8 @@ def _require_columns(df: pd.DataFrame, dataset_id: str, required: Sequence[str])
         )
 
 
-def _parse_suzuki_reaction_features(rxn_smiles: str) -> list[float]:
-    """Deterministically featurize a Perera Suzuki-Miyaura reaction SMILES `reactants>>product`."""
+def _split_suzuki_reaction_fragments(rxn_smiles: str) -> tuple[str, str, str, str, str]:
+    """Extract `(halide_frag, boron_frag, ligand_frag, env_smiles, prod_part)` from `reactants>>product`."""
     parts = str(rxn_smiles).strip().split(">>")
     react_part = parts[0] if parts else ""
     prod_part = parts[1] if len(parts) > 1 else ""
@@ -860,12 +925,23 @@ def _parse_suzuki_reaction_features(rxn_smiles: str) -> list[float]:
             boron_frag = frag
         elif not ligand_frag and c["n_ps_ligand"] > 0 and c["heavy_atoms"] >= 10:
             ligand_frag = frag
-        elif not halide_frag and (c["n_chlorine"] + c["n_bromine"] + c["n_iodine"]) > 0:
+        elif not halide_frag and (
+            (c["n_chlorine"] + c["n_bromine"] + c["n_iodine"]) > 0
+            or ("S(=O)(=O)O" in frag and c["aromatic_atoms"] >= 6)
+            or ("OS(=O)(=O)C(F)(F)F" in frag)
+            or ("O=S(=O)(O" in frag)
+        ):
             halide_frag = frag
         else:
             solvent_base_frags.append(frag)
 
     env_smiles = ".".join(solvent_base_frags)
+    return halide_frag, boron_frag, ligand_frag, env_smiles, prod_part
+
+
+def _parse_suzuki_reaction_features(rxn_smiles: str) -> list[float]:
+    """Deterministically featurize a Perera Suzuki-Miyaura reaction SMILES `reactants>>product`."""
+    halide_frag, boron_frag, ligand_frag, env_smiles, prod_part = _split_suzuki_reaction_fragments(rxn_smiles)
     return (
         reagent_slot_vector(halide_frag)
         + reagent_slot_vector(boron_frag)
@@ -873,6 +949,117 @@ def _parse_suzuki_reaction_features(rxn_smiles: str) -> list[float]:
         + reagent_slot_vector(env_smiles)
         + reagent_slot_vector(prod_part)
     )
+
+
+def _encode_reaction_slots(
+    slot_rows: Sequence[Sequence[str]],
+    slot_names: Sequence[str],
+    *,
+    encoding: str = "descriptors",
+    continuous_rows: Sequence[Sequence[float]] | None = None,
+    continuous_names: Sequence[str] | None = None,
+    morgan_bits: int = 32,
+    max_onehot_per_slot: int = 128,
+) -> tuple[list[list[float]], list[str]]:
+    """Encode HTE reaction reagent slots under `'descriptors'`, `'onehot'`, or `'onehot_morgan'`."""
+    if encoding not in VALID_HTE_ENCODINGS:
+        raise ValueError(f"Unknown reaction encoding {encoding!r}; expected one of {VALID_HTE_ENCODINGS}")
+    if encoding == "onehot_morgan" and not HAS_RDKIT:
+        raise ImportError(
+            "RDKit is required for reaction encoding='onehot_morgan'; "
+            "install `lab-decide[chem]` or use encoding='onehot' / 'descriptors'."
+        )
+
+    n = len(slot_rows)
+    cont_n = list(continuous_names) if continuous_names is not None else []
+    if n == 0:
+        return [], cont_n
+
+    if encoding == "descriptors":
+        feat_names = cont_n + [f"{s}_{f}" for s in slot_names for f in REAGENT_SLOT_FEATURES]
+        out_rows: list[list[float]] = []
+        for i, s_row in enumerate(slot_rows):
+            prefix = list(continuous_rows[i]) if continuous_rows is not None else []
+            vec: list[float] = list(prefix)
+            for val in s_row:
+                vec.extend(reagent_slot_vector(val))
+            out_rows.append(vec)
+        return out_rows, feat_names
+
+    # Build deterministic sorted one-hot reagent vocabularies per slot
+    n_slots = len(slot_names)
+    slot_vocabs: list[tuple[dict[str, int], bool]] = []
+    feat_names = list(cont_n)
+    for j, s_name in enumerate(slot_names):
+        counts: dict[str, int] = {}
+        for s_row in slot_rows:
+            tok = (s_row[j] or "").strip() or "<EMPTY>"
+            counts[tok] = counts.get(tok, 0) + 1
+        if len(counts) <= max_onehot_per_slot:
+            vocab_list = sorted(counts.keys())
+            has_other = False
+        else:
+            # Deterministic frequency-descending, lexicographic tie-broken cap for large literature pools
+            vocab_list = [
+                k for k, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:max_onehot_per_slot]
+            ]
+            has_other = True
+        vmap = {tok: idx for idx, tok in enumerate(vocab_list)}
+        slot_vocabs.append((vmap, has_other))
+        for k_idx in range(len(vocab_list)):
+            feat_names.append(f"{s_name}_oh_{k_idx}")
+        if has_other:
+            feat_names.append(f"{s_name}_oh_other")
+            if encoding == "onehot":
+                for f_sub in REAGENT_SLOT_FEATURES:
+                    feat_names.append(f"{s_name}_{f_sub}")
+
+    if encoding == "onehot_morgan":
+        fp_subnames = (
+            "present",
+            *RDKIT_MOL_EXTRA_FEATURES,
+            *(f"mfp_{b}" for b in range(morgan_bits)),
+        )
+        for s_name in slot_names:
+            for fn in fp_subnames:
+                feat_names.append(f"{s_name}_{fn}")
+
+    # Pre-build dense numpy blocks per slot for speed on 27k+ row benchmarks
+    blocks: list[np.ndarray] = []
+    if continuous_rows is not None:
+        blocks.append(np.asarray(continuous_rows, dtype=np.float64))
+
+    for j in range(n_slots):
+        vmap, has_other = slot_vocabs[j]
+        width = len(vmap) + (1 if has_other else 0)
+        oh_mat = np.zeros((n, width), dtype=np.float64)
+        extra_desc: list[list[float]] | None = [] if (has_other and encoding == "onehot") else None
+        for i, s_row in enumerate(slot_rows):
+            raw_val = (s_row[j] or "").strip()
+            tok = raw_val or "<EMPTY>"
+            col_i = vmap.get(tok)
+            if col_i is not None:
+                oh_mat[i, col_i] = 1.0
+            elif has_other:
+                oh_mat[i, len(vmap)] = 1.0
+            if extra_desc is not None:
+                extra_desc.append(reagent_slot_vector(raw_val))
+        blocks.append(oh_mat)
+        if extra_desc is not None:
+            blocks.append(np.asarray(extra_desc, dtype=np.float64))
+
+    if encoding == "onehot_morgan":
+        for j in range(n_slots):
+            uniq_vals = {(s_row[j] or "").strip() for s_row in slot_rows}
+            fp_cache = {
+                u: np.asarray(smiles_to_morgan_physicochem(u, n_bits=morgan_bits), dtype=np.float64)
+                for u in uniq_vals
+            }
+            fp_mat = np.vstack([fp_cache[(s_row[j] or "").strip()] for s_row in slot_rows])
+            blocks.append(fp_mat)
+
+    X_mat = np.hstack(blocks)
+    return X_mat.tolist(), feat_names
 
 
 def _load_calisol_jsonl_or_csv(path: str, fmt: str, max_rows: int | None) -> tuple[list[dict[str, Any]], int, int]:
@@ -991,6 +1178,13 @@ def _load_calisol_jsonl_or_csv(path: str, fmt: str, max_rows: int | None) -> tup
     return recs, len(df_json), dropped
 
 
+def _single_mol_group_keys(smiles_seq: Sequence[str]) -> list[str] | None:
+    """Compute Bemis-Murcko scaffold group keys when RDKit is installed; None otherwise."""
+    if not HAS_RDKIT:
+        return None
+    return compute_scaffold_groups(smiles_seq).tolist()
+
+
 def load_open_dataset(
     dataset_id: str,
     path: str | os.PathLike[str] | None = None,
@@ -1001,13 +1195,27 @@ def load_open_dataset(
     deduplicate: bool = True,
     offline: bool = False,
     min_rows: int = 4,
+    encoding: str = "descriptors",
+    data_source: str = "real_csv",
 ) -> DatasetBundle:
     """Load any registered `OpenCalibrationDataset` from CSV/TSV/JSON/JSONL into a `DatasetBundle`.
 
     Strictly excludes pre-fitted predictions, sibling assay outcomes, and plate-index columns
-    listed in `spec.leakage_excluded_columns` so downstream conformal calibration is leakage-free.
+    listed in `spec.leakage_excluded_columns` so downstream conformal calibration is leakage-free,
+    and attaches explicit domain `group_keys` (never using regex fallback groups).
     """
+    if encoding not in VALID_HTE_ENCODINGS:
+        raise ValueError(f"Unknown encoding {encoding!r}; expected one of {VALID_HTE_ENCODINGS}")
+    if data_source not in ("real_csv", "synthetic_fixture"):
+        raise ValueError(f"data_source must be 'real_csv' or 'synthetic_fixture', got {data_source!r}")
+
     spec = get_open_dataset(dataset_id)
+    if spec.domain != "reaction_optimization" and encoding != "descriptors":
+        raise ValueError(
+            f"Encoding {encoding!r} is only supported for reaction_optimization datasets, "
+            f"not {spec.dataset_id!r} ({spec.domain})."
+        )
+
     if path is None:
         resolved = default_dataset_cache_path(spec.dataset_id)
         if not os.path.exists(resolved):
@@ -1032,6 +1240,8 @@ def load_open_dataset(
             target=tgt_col,
             deduplicate_smiles=deduplicate,
             min_rows=min_rows,
+            data_source=data_source,
+            group_kind=spec.group_kind,
         )
 
     if spec.dataset_id == "aqsoldb":
@@ -1047,6 +1257,8 @@ def load_open_dataset(
             target=tgt_col,
             deduplicate_smiles=deduplicate,
             min_rows=min_rows,
+            data_source=data_source,
+            group_kind=spec.group_kind,
         )
 
     if spec.dataset_id == "calisol23":
@@ -1055,10 +1267,11 @@ def load_open_dataset(
             raise ValueError(f"Dataset 'calisol23' contained 0 valid records in {resolved}")
         X_cal, y_cal, feat_names = featurize_calisol_records(recs)
         keys = [
-            f"{r['salt']}|T={r['T_K']:.2f}|c={r['c']:.4f}|"
+            f"{r['doi'] or 'missing_doi'}|{r['salt']}|T={r['T_K']:.2f}|c={r['c']:.4f}|"
             + ",".join(f"{s}:{v:.4f}" for s, v in sorted(r["solvents"].items()))
             for r in recs
         ]
+        g_keys = [str(r["doi"]).strip() or f"calisol_missing_doi_{i}" for i, r in enumerate(recs)]
         cids = [f"{r['doi'] or 'calisol'}#{i:05d}" for i, r in enumerate(recs)]
         return _finalize_feature_bundle(
             X_cal.tolist(),
@@ -1071,6 +1284,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=g_keys,
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     if spec.dataset_id == "bigsoldb_v2_2":
@@ -1088,6 +1304,7 @@ def load_open_dataset(
         X_rows: list[list[float]] = []
         y_vals: list[float] = []
         keys: list[str] = []
+        raw_solutes: list[str] = []
         cids: list[str] = []
         dropped = 0
         for idx, row in df.iterrows():
@@ -1108,9 +1325,12 @@ def load_open_dataset(
                 + reagent_slot_vector(solvent_smi)
             )
             y_vals.append(y_val)
+            raw_solutes.append(solute_smi)
             keys.append(f"{solute_smi}|{solvent_smi}|T={t_k:.2f}")
             cid_val = row.get("Compound_Name") if "Compound_Name" in df.columns else None
             cids.append(str(cid_val).strip() if pd.notna(cid_val) and str(cid_val).strip() else f"bigsol-{idx}")
+        solute_canon_cache = {s: canonical_group_smiles(s) for s in set(raw_solutes)}
+        g_keys = [solute_canon_cache[s] for s in raw_solutes]
         return _finalize_feature_bundle(
             X_rows,
             y_vals,
@@ -1122,6 +1342,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=g_keys,
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     if spec.dataset_id == "freesolv":
@@ -1163,6 +1386,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=_single_mol_group_keys(keys),
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     if spec.dataset_id == "lipophilicity_astrazeneca":
@@ -1204,6 +1430,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=_single_mol_group_keys(keys),
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     if spec.dataset_id == "biogen_adme":
@@ -1245,6 +1474,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=_single_mol_group_keys(keys),
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     if spec.dataset_id == "buchwald_hartwig_doyle":
@@ -1257,10 +1489,10 @@ def load_open_dataset(
         )
         _require_columns(df, "buchwald_hartwig_doyle", req_cols)
         slot_prefixes = ("aryl_halide", "additive", "base", "ligand")
-        feat_names = [f"{p}_{f}" for p in slot_prefixes for f in REAGENT_SLOT_FEATURES]
-        X_rows = []
+        slot_rows_bh: list[tuple[str, str, str, str]] = []
         y_vals = []
         keys = []
+        raw_aryls: list[str] = []
         cids = []
         dropped = 0
         for idx, row in df.iterrows():
@@ -1277,15 +1509,14 @@ def load_open_dataset(
             if not (ah_s and bs_s and lg_s and math.isfinite(y_val)):
                 dropped += 1
                 continue
-            X_rows.append(
-                reagent_slot_vector(ah_s)
-                + reagent_slot_vector(ad_s)
-                + reagent_slot_vector(bs_s)
-                + reagent_slot_vector(lg_s)
-            )
+            slot_rows_bh.append((ah_s, ad_s, bs_s, lg_s))
             y_vals.append(y_val)
+            raw_aryls.append(ah_s)
             keys.append(f"{ah_s}.{ad_s}.{bs_s}.{lg_s}")
             cids.append(f"bh-doyle-{idx:04d}")
+        X_rows, feat_names = _encode_reaction_slots(slot_rows_bh, slot_prefixes, encoding=encoding)
+        ah_cache = {s: canonical_group_smiles(s) for s in set(raw_aryls)}
+        g_keys = [ah_cache[s] for s in raw_aryls]
         return _finalize_feature_bundle(
             X_rows,
             y_vals,
@@ -1297,6 +1528,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=g_keys,
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     if spec.dataset_id == "suzuki_miyaura_perera":
@@ -1307,11 +1541,10 @@ def load_open_dataset(
             max_rows=max_rows,
         )
         _require_columns(df, "suzuki_miyaura_perera", ["rxn", tgt_col])
-        slot_prefixes = ("electrophile", "nucleophile", "ligand", "medium", "product")
-        feat_names = [f"{p}_{f}" for p in slot_prefixes for f in REAGENT_SLOT_FEATURES]
-        X_rows = []
+        slot_rows_sz5: list[tuple[str, str, str, str, str]] = []
         raw_y: list[float] = []
         keys = []
+        raw_substrates: list[tuple[str, str]] = []
         cids = []
         dropped = 0
         for idx, row in df.iterrows():
@@ -1324,15 +1557,32 @@ def load_open_dataset(
             if not (rxn_s and ">>" in rxn_s and math.isfinite(y_val)):
                 dropped += 1
                 continue
-            X_rows.append(_parse_suzuki_reaction_features(rxn_s))
+            frags5 = _split_suzuki_reaction_fragments(rxn_s)
+            slot_rows_sz5.append(frags5)
             raw_y.append(y_val)
+            raw_substrates.append((frags5[0] or rxn_s.split(">>")[0], frags5[1] or "boron"))
             keys.append(rxn_s)
             cids.append(f"suzuki-{idx:04d}")
-        # Upstream rxn_yields TSV stores fractional yield in [0, 1]; convert to percentage [0, 100]
         if raw_y and max(raw_y) <= 1.05 and min(raw_y) >= -0.05:
             y_vals = [100.0 * v for v in raw_y]
         else:
             y_vals = raw_y
+
+        if encoding == "descriptors":
+            slot_prefixes_sz = ("electrophile", "nucleophile", "ligand", "medium", "product")
+            X_rows, feat_names = _encode_reaction_slots(
+                slot_rows_sz5, slot_prefixes_sz, encoding="descriptors"
+            )
+        else:
+            slot_prefixes_sz4 = ("electrophile", "nucleophile", "ligand", "medium")
+            slot_rows_sz4 = [(r[0], r[1], r[2], r[3]) for r in slot_rows_sz5]
+            X_rows, feat_names = _encode_reaction_slots(
+                slot_rows_sz4, slot_prefixes_sz4, encoding=encoding
+            )
+
+        uniq_sub_toks = {t for pair in raw_substrates for t in pair}
+        sub_cache = {t: canonical_group_smiles(t) for t in uniq_sub_toks}
+        g_keys = [f"{sub_cache[h]}.{sub_cache[b]}" for h, b in raw_substrates]
         return _finalize_feature_bundle(
             X_rows,
             y_vals,
@@ -1344,6 +1594,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=g_keys,
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     if spec.dataset_id == "direct_arylation_shields":
@@ -1355,14 +1608,13 @@ def load_open_dataset(
             max_rows=max_rows,
         )
         _require_columns(df, "direct_arylation_shields", req_cols)
-        slot_prefixes = ("base", "ligand", "solvent")
-        feat_names = (
-            ["Concentration", "Temp_C", "inv_T_1000"]
-            + [f"{p}_{f}" for p in slot_prefixes for f in REAGENT_SLOT_FEATURES]
-        )
-        X_rows = []
+        slot_prefixes_da = ("base", "ligand", "solvent")
+        cont_names_da = ["Concentration", "Temp_C", "inv_T_1000"]
+        cont_rows_da: list[list[float]] = []
+        slot_rows_da: list[tuple[str, str, str]] = []
         y_vals = []
         keys = []
+        raw_ligands: list[str] = []
         cids = []
         dropped = 0
         for idx, row in df.iterrows():
@@ -1389,15 +1641,21 @@ def load_open_dataset(
             ):
                 dropped += 1
                 continue
-            X_rows.append(
-                [conc, temp_c, 1000.0 / temp_k]
-                + reagent_slot_vector(bs_s)
-                + reagent_slot_vector(lg_s)
-                + reagent_slot_vector(sv_s)
-            )
+            cont_rows_da.append([conc, temp_c, 1000.0 / temp_k])
+            slot_rows_da.append((bs_s, lg_s, sv_s))
             y_vals.append(y_val)
+            raw_ligands.append(lg_s)
             keys.append(f"{bs_s}|{lg_s}|{sv_s}|c={conc:.4f}|T={temp_c:.2f}")
             cids.append(f"shields-da-{idx:04d}")
+        X_rows, feat_names = _encode_reaction_slots(
+            slot_rows_da,
+            slot_prefixes_da,
+            encoding=encoding,
+            continuous_rows=cont_rows_da,
+            continuous_names=cont_names_da,
+        )
+        lg_cache = {s: canonical_group_smiles(s) for s in set(raw_ligands)}
+        g_keys = [lg_cache[s] for s in raw_ligands]
         return _finalize_feature_bundle(
             X_rows,
             y_vals,
@@ -1409,6 +1667,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=g_keys,
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     if spec.dataset_id == "bh_hte_ood_2026":
@@ -1420,11 +1681,11 @@ def load_open_dataset(
             max_rows=max_rows,
         )
         _require_columns(df, "bh_hte_ood_2026", req_cols)
-        slot_prefixes = ("aryl", "amine", "catalyst", "base", "solvent")
-        feat_names = [f"{p}_{f}" for p in slot_prefixes for f in REAGENT_SLOT_FEATURES]
-        X_rows = []
+        slot_prefixes_bh26 = ("aryl", "amine", "catalyst", "base", "solvent")
+        slot_rows_bh26: list[tuple[str, str, str, str, str]] = []
         y_vals = []
         keys = []
+        raw_aryls26: list[str] = []
         cids = []
         dropped = 0
         for idx, row in df.iterrows():
@@ -1441,17 +1702,17 @@ def load_open_dataset(
             if not (ar_s and am_s and cat_s and bs_s and sv_s and math.isfinite(y_val)):
                 dropped += 1
                 continue
-            X_rows.append(
-                reagent_slot_vector(ar_s)
-                + reagent_slot_vector(am_s)
-                + reagent_slot_vector(cat_s)
-                + reagent_slot_vector(bs_s)
-                + reagent_slot_vector(sv_s)
-            )
+            slot_rows_bh26.append((ar_s, am_s, cat_s, bs_s, sv_s))
             y_vals.append(y_val)
+            raw_aryls26.append(ar_s)
             keys.append(f"{ar_s}|{am_s}|{cat_s}|{bs_s}|{sv_s}")
             src = str(row.get("Source") or "bh2026").strip()
             cids.append(f"{src}-{idx:05d}")
+        X_rows, feat_names = _encode_reaction_slots(
+            slot_rows_bh26, slot_prefixes_bh26, encoding=encoding
+        )
+        ar26_cache = {s: canonical_group_smiles(s) for s in set(raw_aryls26)}
+        g_keys = [ar26_cache[s] for s in raw_aryls26]
         return _finalize_feature_bundle(
             X_rows,
             y_vals,
@@ -1463,6 +1724,9 @@ def load_open_dataset(
             dropped_nonfinite=dropped,
             deduplicate=deduplicate,
             min_rows=min_rows,
+            group_keys=g_keys,
+            group_kind=spec.group_kind,
+            data_source=data_source,
         )
 
     raise RuntimeError(f"Unhandled schema loader for {spec.dataset_id!r}")
@@ -1482,8 +1746,12 @@ def calibrate_open_dataset(
     fracs: tuple[float, float, float, float] = (0.50, 0.20, 0.15, 0.15),
     max_rows: int | None = None,
     offline: bool = False,
+    encoding: str = "descriptors",
+    distance_metric: str = "euclidean",
+    surrogate: str = "gbdt",
+    data_source: str = "real_csv",
 ) -> tuple[ConformalTrustModel, DatasetBundle, SplitIndices, dict[str, Any]]:
-    """Load `dataset_id`, fit `ConformalTrustModel`, and evaluate trust-region calibration + BO."""
+    """Load `dataset_id`, fit `ConformalTrustModel`, and evaluate trust-region calibration + ranking."""
     spec = get_open_dataset(dataset_id)
     bundle = load_open_dataset(
         spec.dataset_id,
@@ -1491,10 +1759,24 @@ def calibrate_open_dataset(
         fmt=fmt,
         max_rows=max_rows,
         offline=offline,
+        encoding=encoding,
+        data_source=data_source,
     )
+    if split_strategy == "scaffold" and spec.group_kind != "murcko_scaffold":
+        raise ValueError(
+            f"Dataset {spec.dataset_id!r} uses composite keys (group_kind={spec.group_kind!r}) rather than "
+            "single-molecule SMILES; use split_strategy='group' instead of 'scaffold'."
+        )
+    if split_strategy == "group" and bundle.group_keys is None:
+        raise ImportError(
+            f"RDKit is required to compute {spec.group_kind} group keys for dataset {spec.dataset_id!r}; "
+            "install `lab-decide[chem]` (`pip install rdkit`)."
+        )
+
     splits = partition_splits(
         len(bundle.y),
         smiles=bundle.smiles if split_strategy == "scaffold" else None,
+        groups=bundle.group_keys if split_strategy == "group" else None,
         strategy=split_strategy,
         seed=seed,
         fracs=fracs,
@@ -1509,6 +1791,8 @@ def calibrate_open_dataset(
         trust_pct=trust_pct,
         seed=seed,
         nonconformity=nonconformity,
+        distance_metric=distance_metric,
+        surrogate=surrogate,
         domain_bounds=spec.domain_bounds,
         feature_names=bundle.feature_names,
     )
@@ -1523,15 +1807,20 @@ def calibrate_open_dataset(
         y_te, res["lo"], res["hi"], np.ones(len(y_te), dtype=bool), pred=res["pred"]
     )
     wink_in = winkler_interval_score(y_te, res["lo"], res["hi"], alpha=alpha, mask=inside)
+    spearman_d = spearman_rank_correlation(res["distance"], np.abs(y_te - res["pred"]))
 
-    maximize = spec.domain != "admet" or spec.dataset_id != "biogen_adme"
-    bo_metrics = benchmark_trust_region_bo(
-        advisor,
-        bundle.X[splits.pool_idx],
-        bundle.y[splits.pool_idx],
-        batch_size=min(8, len(splits.pool_idx)),
-        maximize=maximize,
-    )
+    bo_metrics: dict[str, float] | None
+    if spec.objective_direction == "calibration_only":
+        bo_metrics = None
+    else:
+        maximize = spec.objective_direction == "maximize"
+        bo_metrics = benchmark_trust_region_bo(
+            advisor,
+            bundle.X[splits.pool_idx],
+            bundle.y[splits.pool_idx],
+            batch_size=min(8, len(splits.pool_idx)),
+            maximize=maximize,
+        )
 
     metrics: dict[str, Any] = {
         "dataset_id": spec.dataset_id,
@@ -1539,11 +1828,21 @@ def calibrate_open_dataset(
         "target_unit": spec.target_unit,
         "spdx_license": spec.spdx_license,
         "commercial_use_ok": spec.commercial_use_ok,
+        "objective_direction": spec.objective_direction,
+        "group_kind": spec.group_kind,
+        "data_source": bundle.data_source,
+        "split_strategy": split_strategy,
+        "encoding": encoding,
+        "distance_metric": distance_metric,
+        "nonconformity": nonconformity,
         "n_clean": len(bundle.y),
         "n_train": int(splits.train_idx.size),
         "n_pool": int(splits.pool_idx.size),
         "n_cal": int(splits.cal_idx.size),
         "n_test": int(splits.test_idx.size),
+        "achieved_fractions": splits.achieved_fractions,
+        "n_groups_total": splits.n_groups_total,
+        "group_counts": splits.group_counts,
         "n_features": int(bundle.X.shape[1]),
         "alpha": float(alpha),
         "trust_pct": float(trust_pct),
@@ -1560,6 +1859,7 @@ def calibrate_open_dataset(
         "width_out": w_out,
         "width_all": w_all,
         "winkler_in": wink_in,
+        "spearman_distance_abs_error": spearman_d,
         "constrained_bo": bo_metrics,
     }
     return advisor, bundle, splits, metrics
@@ -1585,22 +1885,32 @@ def make_schema_sample_records(
     def _make_organic_smiles(idx: int, is_ood: bool) -> str:
         chain_len = (idx % 6) + (9 if is_ood else 1)
         chain = "C" * chain_len
+        q = idx // 6
+        branch = "".join("C(C)" if ((q >> b) & 1) else "C" for b in range(5)) if q > 0 else ""
         if is_ood:
             ood_motifs = (
-                "c1cc(Cl)ccc1c2ccc(Br)cc2",
+                "c1cc(Cl)ccc1-c2ccc(Br)cc2",
                 "c1cc(F)c(F)cc1S(=O)(=O)C(F)(F)F",
                 "c1ccc2c(c1)ccc3ccccc23",
                 "C1CCC(P(C2CCCCC2)C2CCCCC2)CC1",
             )
             rings = ood_motifs[idx % len(ood_motifs)]
         else:
-            rings = "c1ccccc1" if idx % 2 == 0 else "C1CCCCC1"
-        polar = "C(=O)O" if idx % 3 == 0 else ("O" * ((idx % 2) + 1) if not is_ood else "Cl")
-        hal = "C(F)(F)F" if (is_ood and idx % 2 == 0) else ("F" if idx % 5 == 0 else "")
-        tail = "N" if idx % 4 == 0 else ""
-        # Bijection over (idx % 6, idx // 6) guarantees every idx yields a unique SMILES
-        branch = "(C)" * (idx // 6)
-        return f"{chain}{branch}{rings}{polar}{hal}{tail}"
+            if idx % 16 == 0:
+                rings = "c1ccc2ccccc2c1"
+            elif idx % 16 == 8:
+                rings = "C1CCOC1"
+            else:
+                rings = "c1ccccc1" if idx % 2 == 0 else "C1CCCCC1"
+        hal = "(C(F)(F)F)" if (is_ood and idx % 2 == 0) else ("(F)" if idx % 5 == 0 else "")
+        tail = "(N)" if idx % 4 == 0 else ""
+        if idx % 3 == 0:
+            polar_br = "(C(=O)O)"
+        elif not is_ood:
+            polar_br = "(O)" if idx % 2 == 0 else "(CCO)"
+        else:
+            polar_br = "(Cl)"
+        return f"{chain}{branch}C{polar_br}C{hal}C{tail}{rings}"
 
     records: list[dict[str, Any]] = []
 
@@ -1963,6 +2273,8 @@ def make_schema_sample_records(
             ("BrettPhos", "COc1ccc(OC)c(-c2c(C(C)C)cc(C(C)C)cc2C(C)C)c1P(C1CCCCC1)C1CCCCC1", 18.0),
             ("PCy3", "C1CCC(P(C2CCCCC2)C2CCCCC2)CC1", 34.0),
             ("PPh3", "c1ccc(P(c2ccccc2)c2ccccc2)cc1", 8.0),
+            ("XPhos", "CC(C)c1cc(C(C)C)c(-c2ccccc2P(C2CCCCC2)C2CCCCC2)c(C(C)C)c1", 26.0),
+            ("SPhos", "COc1cccc(OC)c1-c1ccccc1P(C1CCCCC1)C1CCCCC1", 22.0),
         ]
         solvents_da = [("DMAc", "CC(N(C)C)=O", 14.0), ("BuCN", "CCCC#N", 6.0), ("p-Xylene", "Cc1ccc(C)cc1", -6.0)]
         ood_solv_da = (

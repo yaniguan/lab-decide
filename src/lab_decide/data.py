@@ -1,4 +1,4 @@
-"""Safe atomic dataset download, schema/NaN validation, SMILES deduplication, and 4-way splits."""
+"""Safe atomic dataset download, schema/NaN validation, SMILES deduplication, and balanced 4-way splits."""
 from __future__ import annotations
 
 import hashlib
@@ -9,11 +9,12 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GroupShuffleSplit, train_test_split
+from sklearn.model_selection import train_test_split
 
 from lab_decide.chemistry import (
     ESOL_FEATURES,
     ESOL_TARGET,
+    HAS_RDKIT,
     compute_scaffold_groups,
     normalize_smiles_str,
 )
@@ -24,11 +25,14 @@ ESOL_SHA256 = "8c06a76f0c6487d29ab0f903e6a7a7139f189ab3c1178f159c8be8964602f189"
 DEFAULT_DATA_PATH = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "delaney-processed.csv")
 )
+BUNDLED_ESOL_RESOURCE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "delaney-processed.csv")
+)
 
 
 @dataclass(frozen=True)
 class DatasetBundle:
-    """Validated tabular feature matrix, target vector, SMILES provenance, and cleaning counts."""
+    """Validated tabular feature matrix, target vector, SMILES provenance, group keys, and data source."""
 
     X: np.ndarray
     y: np.ndarray
@@ -39,6 +43,9 @@ class DatasetBundle:
     raw_row_count: int
     dropped_nonfinite_count: int
     deduplicated_count: int
+    group_keys: list[str] | None = None
+    group_kind: str = "murcko_scaffold"
+    data_source: str = "real_csv"
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,9 @@ class SplitIndices:
     pool_idx: np.ndarray
     cal_idx: np.ndarray
     test_idx: np.ndarray
+    n_groups_total: int | None = None
+    group_counts: dict[str, int] | None = None
+    achieved_fractions: dict[str, float] | None = None
 
 
 def compute_file_sha256(path: str, chunk_size: int = 65536) -> str:
@@ -126,7 +136,8 @@ def ensure_esol_csv(
 
     if offline:
         raise FileNotFoundError(
-            f"Dataset {path} is not cached locally and --offline mode is enabled."
+            f"Dataset {path} is not cached locally and --offline mode is enabled "
+            "(pass --allow-synthetic to run on the deterministic synthetic fixture)."
         )
 
     download_file_atomic(url, path, expected_sha256=expected_sha256, timeout=timeout)
@@ -148,7 +159,6 @@ def make_synthetic_solubility_dataframe(n: int = 240, seed: int = 0) -> pd.DataF
     rot = np.where(is_ood_tail, rng.integers(6, 13, size=n), rng.integers(0, 6, size=n)).astype(float)
     tpsa = 18.0 * hbd + rng.uniform(0.0, 75.0, size=n)
 
-    # Physical trend + nonlinear polycyclic packing penalty & heteroscedastic OOD variance
     packing_shift = np.where(is_ood_tail, -1.35 * np.sin(mw / 50.0), 0.0)
     noise_scale = np.where(is_ood_tail, 1.15, 0.22)
     y = (
@@ -162,15 +172,10 @@ def make_synthetic_solubility_dataframe(n: int = 240, seed: int = 0) -> pd.DataF
     )
     y = np.clip(y, -11.5, 1.55)
 
-    smiles = []
-    for i in range(n):
-        r = int(rings[i])
-        chain = "C" * max(1, int(mw[i] // 45))
-        ring_part = "c1ccccc1" * min(r, 2)
-        oh = "O" * min(int(hbd[i]), 2)
-        smiles.append(f"{chain}{ring_part}{oh}_{i}" if not ring_part else f"{chain}{ring_part}{oh}")
-    # Ensure unique synthetic SMILES strings per compound index via alkyl tail length + branch
-    unique_smiles = [f"{'C' * (i % 7 + 1)}{'c1ccccc1' if rings[i] > 0 else 'CCO'}{'O' * (i // 7)}" for i in range(n)]
+    unique_smiles = [
+        f"{'C' * (i % 7 + 1)}{'c1ccccc1' if rings[i] > 0 else 'CCO'}{'O' * (i // 7)}"
+        for i in range(n)
+    ]
 
     return pd.DataFrame(
         {
@@ -195,8 +200,13 @@ def validate_and_clean_dataframe(
     deduplicate_smiles: bool = True,
     canonicalize_smiles: bool = False,
     min_rows: int = 4,
+    data_source: str = "real_csv",
+    group_column: str | None = None,
+    group_kind: str = "murcko_scaffold",
 ) -> DatasetBundle:
-    """Validate schema, filter non-finite rows, and deduplicate replicate SMILES."""
+    """Validate schema, filter non-finite rows, deduplicate replicate SMILES, and attach group keys."""
+    if data_source not in ("real_csv", "synthetic_fixture"):
+        raise ValueError(f"data_source must be 'real_csv' or 'synthetic_fixture', got {data_source!r}")
     feature_list = list(features)
     if not feature_list:
         raise ValueError("features list must be non-empty")
@@ -231,7 +241,8 @@ def validate_and_clean_dataframe(
             agg_spec: dict[str, str] = {col: "mean" for col in required}
             if "Compound ID" in work.columns:
                 agg_spec["Compound ID"] = "first"
-            # Preserve first-seen deterministic row order across pandas versions
+            if group_column is not None and group_column in work.columns:
+                agg_spec[group_column] = "first"
             first_order = work.drop_duplicates(subset=["smiles"], keep="first")["smiles"].tolist()
             grouped = work.groupby("smiles", sort=False, as_index=False).agg(agg_spec)
             grouped = grouped.set_index("smiles").loc[first_order].reset_index()
@@ -256,6 +267,16 @@ def validate_and_clean_dataframe(
         if "Compound ID" in work.columns
         else [f"cand-{i:04d}" for i in range(len(work))]
     )
+
+    group_keys_out: list[str] | None = None
+    if group_column is not None and group_column in work.columns:
+        group_keys_out = [str(v).strip() for v in work[group_column].tolist()]
+    elif "smiles" in work.columns and HAS_RDKIT:
+        try:
+            group_keys_out = compute_scaffold_groups(smiles_out).tolist()
+        except ValueError:
+            group_keys_out = None
+
     return DatasetBundle(
         X=X,
         y=y,
@@ -266,6 +287,9 @@ def validate_and_clean_dataframe(
         raw_row_count=raw_count,
         dropped_nonfinite_count=dropped_nonfinite,
         deduplicated_count=dedup_count,
+        group_keys=group_keys_out,
+        group_kind=group_kind,
+        data_source=data_source,
     )
 
 
@@ -277,19 +301,27 @@ def load_dataset(
     deduplicate_smiles: bool = True,
     canonicalize_smiles: bool = False,
     offline: bool = False,
+    allow_synthetic: bool = False,
     min_rows: int = 4,
 ) -> DatasetBundle:
-    """Load ESOL (or a custom CSV / synthetic offline fallback) into a validated DatasetBundle."""
+    """Load ESOL (or custom CSV; synthetic fixture strictly opt-in via `allow_synthetic=True`)."""
     if csv_path is not None:
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"CSV file not found: {csv_path}")
         df = pd.read_csv(csv_path)
+        data_source = "real_csv"
     else:
         if offline and not os.path.exists(DEFAULT_DATA_PATH):
-            df = make_synthetic_solubility_dataframe(n=240, seed=0)
+            if allow_synthetic:
+                df = make_synthetic_solubility_dataframe(n=240, seed=0)
+                data_source = "synthetic_fixture"
+            else:
+                ensure_esol_csv(DEFAULT_DATA_PATH, offline=True)
+                raise AssertionError("unreachable")
         else:
             resolved = ensure_esol_csv(DEFAULT_DATA_PATH, offline=offline)
             df = pd.read_csv(resolved)
+            data_source = "real_csv"
 
     return validate_and_clean_dataframe(
         df,
@@ -298,6 +330,7 @@ def load_dataset(
         deduplicate_smiles=deduplicate_smiles,
         canonicalize_smiles=canonicalize_smiles,
         min_rows=min_rows,
+        data_source=data_source,
     )
 
 
@@ -305,23 +338,144 @@ def load(
     csv_path: str | None = None,
     *,
     offline: bool = False,
+    allow_synthetic: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Backward-compatible loader returning `(X, y)` with schema check & SMILES deduplication."""
-    bundle = load_dataset(csv_path=csv_path, offline=offline)
+    bundle = load_dataset(csv_path=csv_path, offline=offline, allow_synthetic=allow_synthetic)
     return bundle.X, bundle.y
+
+
+def _balanced_group_partition(
+    n_samples: int,
+    groups: Sequence[str],
+    fracs: tuple[float, float, float, float],
+    seed: int,
+    *,
+    strategy_name: str,
+) -> SplitIndices:
+    """Deterministic balanced 4-way group-disjoint bin packing (`train, pool, calibration, test`).
+
+    Sorts unique groups by descending row count, uses `seed` ONLY to shuffle groups of equal
+    row count (and tie-break equal deficits), places the largest groups into `train` first up
+    to the requested training row target, and greedily assigns remaining groups to maximize
+    remaining row deficit `target_rows[b] - current_rows[b]` while guaranteeing every split
+    receives at least one group.
+    """
+    if len(groups) != n_samples:
+        raise ValueError(
+            f"groups sequence of length n_samples ({n_samples}) is required for strategy={strategy_name!r}, "
+            f"got length {len(groups)}"
+        )
+
+    members_by_key: dict[str, list[int]] = {}
+    for idx, raw_g in enumerate(groups):
+        key = str(raw_g).strip() if raw_g is not None else ""
+        if not key:
+            raise ValueError(f"Empty group key at row {idx} for strategy={strategy_name!r}")
+        if key.startswith("fallback_r"):
+            raise ValueError(
+                f"Regex fallback group key {key!r} is forbidden in strategy={strategy_name!r}"
+            )
+        members_by_key.setdefault(key, []).append(idx)
+
+    unique_keys = sorted(members_by_key.keys())
+    n_groups = len(unique_keys)
+    if n_groups < 4:
+        raise ValueError(
+            f"{strategy_name.capitalize()} split requires at least 4 distinct groups, found {n_groups}"
+        )
+
+    # Group keys by exact integer member count; shuffle ONLY within equal-size tiers using `seed`
+    by_size: dict[int, list[str]] = {}
+    for k in unique_keys:
+        by_size.setdefault(len(members_by_key[k]), []).append(k)
+
+    rng = np.random.default_rng(seed)
+    ordered_keys: list[str] = []
+    for sz in sorted(by_size.keys(), reverse=True):
+        tier = by_size[sz]
+        if len(tier) > 1:
+            perm = rng.permutation(len(tier))
+            ordered_keys.extend(tier[int(p)] for p in perm)
+        else:
+            ordered_keys.append(tier[0])
+
+    targets = [float(f) * float(n_samples) for f in fracs]
+    bucket_rows = [0, 0, 0, 0]
+    bucket_groups = [0, 0, 0, 0]
+    bucket_members: list[list[int]] = [[], [], [], []]
+
+    filling_train_head = True
+    for pos, g_key in enumerate(ordered_keys):
+        members = members_by_key[g_key]
+        sz = len(members)
+        rem_groups = n_groups - pos
+        empty_buckets = [b for b in range(4) if bucket_groups[b] == 0]
+
+        if rem_groups == len(empty_buckets):
+            # Reserve final groups so zero splits are ever left empty
+            cand_buckets = empty_buckets
+            filling_train_head = False
+        elif filling_train_head:
+            empty_non_train = sum(1 for b in (1, 2, 3) if bucket_groups[b] == 0)
+            # Place largest head groups into train first while doing so stays closer to train target
+            if pos == 0 or (
+                rem_groups > empty_non_train
+                and bucket_rows[0] < targets[0]
+                and abs((bucket_rows[0] + sz) - targets[0]) <= abs(bucket_rows[0] - targets[0])
+            ):
+                chosen = 0
+                bucket_rows[chosen] += sz
+                bucket_groups[chosen] += 1
+                bucket_members[chosen].extend(members)
+                continue
+            filling_train_head = False
+            cand_buckets = [0, 1, 2, 3]
+        else:
+            cand_buckets = [0, 1, 2, 3]
+
+        # Greedy L2-optimal deficit packing: pick bucket maximizing (target_rows - current_rows)
+        deficits = [targets[b] - float(bucket_rows[b]) for b in cand_buckets]
+        max_def = max(deficits)
+        tied = [cand_buckets[i] for i, d_val in enumerate(deficits) if abs(d_val - max_def) <= 1e-9]
+        chosen = tied[int(rng.integers(0, len(tied)))] if len(tied) > 1 else tied[0]
+
+        bucket_rows[chosen] += sz
+        bucket_groups[chosen] += 1
+        bucket_members[chosen].extend(members)
+
+    names = ("train", "pool", "calibration", "test")
+    group_counts = {names[b]: int(bucket_groups[b]) for b in range(4)}
+    achieved_fracs = {names[b]: float(bucket_rows[b]) / float(n_samples) for b in range(4)}
+
+    return SplitIndices(
+        train_idx=np.sort(np.asarray(bucket_members[0], dtype=int)),
+        pool_idx=np.sort(np.asarray(bucket_members[1], dtype=int)),
+        cal_idx=np.sort(np.asarray(bucket_members[2], dtype=int)),
+        test_idx=np.sort(np.asarray(bucket_members[3], dtype=int)),
+        n_groups_total=n_groups,
+        group_counts=group_counts,
+        achieved_fractions=achieved_fracs,
+    )
 
 
 def partition_splits(
     n_samples: int,
     *,
     smiles: Sequence[str] | None = None,
+    groups: Sequence[str] | None = None,
     strategy: str = "random",
     seed: int = 0,
     fracs: tuple[float, float, float, float] = (0.50, 0.20, 0.15, 0.15),
 ) -> SplitIndices:
     """Partition dataset into 4 strictly disjoint splits: `(train, pool, calibration, test)`.
 
-    Supports `'random'` and `'scaffold'` (Bemis-Murcko scaffold group-disjoint splitting).
+    Supports:
+    - `'random'`: stratified index random split.
+    - `'scaffold'`: exact RDKit Bemis-Murcko scaffold balanced group-packing (raises `ImportError`
+      if RDKit is missing and `ValueError` on non-SMILES composite strings).
+    - `'group'`: balanced group-packing over explicit `groups` (solute, DOI, aryl halide / substrate,
+      or Bemis-Murcko scaffold).
     """
     if n_samples < 8:
         raise ValueError(f"Need at least 8 samples for 4-way train/pool/cal/test split, got {n_samples}")
@@ -337,45 +491,46 @@ def partition_splits(
         pool_idx, rem2 = train_test_split(rem1, train_size=rel_pool, random_state=seed)
         rel_te = f_te / (f_cal + f_te)
         cal_idx, te_idx = train_test_split(rem2, test_size=rel_te, random_state=seed)
+        tr_s = np.sort(tr_idx)
+        pool_s = np.sort(pool_idx)
+        cal_s = np.sort(cal_idx)
+        te_s = np.sort(te_idx)
         return SplitIndices(
-            train_idx=np.sort(tr_idx),
-            pool_idx=np.sort(pool_idx),
-            cal_idx=np.sort(cal_idx),
-            test_idx=np.sort(te_idx),
+            train_idx=tr_s,
+            pool_idx=pool_s,
+            cal_idx=cal_s,
+            test_idx=te_s,
+            n_groups_total=None,
+            group_counts=None,
+            achieved_fractions={
+                "train": float(tr_s.size) / float(n_samples),
+                "pool": float(pool_s.size) / float(n_samples),
+                "calibration": float(cal_s.size) / float(n_samples),
+                "test": float(te_s.size) / float(n_samples),
+            },
         )
 
     if strategy == "scaffold":
         if smiles is None or len(smiles) != n_samples:
             raise ValueError("smiles sequence of length n_samples is required when strategy='scaffold'")
-        groups = compute_scaffold_groups(smiles)
-        unique_groups = np.unique(groups)
-        if unique_groups.size < 4:
-            raise ValueError(
-                f"Scaffold split requires at least 4 distinct scaffolds, found {unique_groups.size}"
-            )
-
-        gss1 = GroupShuffleSplit(n_splits=1, test_size=(1.0 - f_tr), random_state=seed)
-        tr_pos, rem1_pos = next(gss1.split(idx, groups=groups))
-        tr_idx = idx[tr_pos]
-        rem1 = idx[rem1_pos]
-
-        rel_pool = f_pool / (f_pool + f_cal + f_te)
-        gss2 = GroupShuffleSplit(n_splits=1, train_size=rel_pool, random_state=seed + 1)
-        pool_pos, rem2_pos = next(gss2.split(rem1, groups=groups[rem1]))
-        pool_idx = rem1[pool_pos]
-        rem2 = rem1[rem2_pos]
-
-        rel_te = f_te / (f_cal + f_te)
-        gss3 = GroupShuffleSplit(n_splits=1, test_size=rel_te, random_state=seed + 2)
-        cal_pos, te_pos = next(gss3.split(rem2, groups=groups[rem2]))
-        cal_idx = rem2[cal_pos]
-        te_idx = rem2[te_pos]
-
-        return SplitIndices(
-            train_idx=np.sort(tr_idx),
-            pool_idx=np.sort(pool_idx),
-            cal_idx=np.sort(cal_idx),
-            test_idx=np.sort(te_idx),
+        scaf_groups = compute_scaffold_groups(smiles).tolist()
+        return _balanced_group_partition(
+            n_samples, scaf_groups, fracs, seed, strategy_name="scaffold"
         )
 
-    raise ValueError(f"Unknown split strategy {strategy!r}; expected 'random' or 'scaffold'")
+    if strategy == "group":
+        eff_groups: Sequence[str] | None = groups
+        if eff_groups is None and smiles is not None:
+            eff_groups = compute_scaffold_groups(smiles).tolist()
+        if eff_groups is None or len(eff_groups) != n_samples:
+            raise ValueError(
+                "groups sequence of length n_samples is required when strategy='group' "
+                "(ensure RDKit is installed for single-molecule scaffold groups or supply explicit group_keys)."
+            )
+        return _balanced_group_partition(
+            n_samples, eff_groups, fracs, seed, strategy_name="group"
+        )
+
+    raise ValueError(
+        f"Unknown split strategy {strategy!r}; expected 'random', 'scaffold', or 'group'"
+    )

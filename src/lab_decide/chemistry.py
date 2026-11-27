@@ -1,7 +1,7 @@
-"""SMILES validation, RDKit ESOL 6D descriptor calculation, and Bemis-Murcko scaffolds."""
+"""SMILES validation, RDKit ESOL 6D descriptors, Morgan fingerprints, and Bemis-Murcko scaffolds."""
 from __future__ import annotations
 
-import re
+from functools import lru_cache
 from typing import Sequence
 
 import numpy as np
@@ -16,21 +16,39 @@ ESOL_FEATURES: list[str] = [
 ]
 ESOL_TARGET: str = "measured log solubility in mols per litre"
 
+RDKIT_MOL_EXTRA_FEATURES: tuple[str, ...] = (
+    "MolWt",
+    "MolLogP",
+    "TPSA",
+    "NumHDonors",
+    "NumHAcceptors",
+    "RingCount",
+)
+
 try:
-    from rdkit import Chem
-    from rdkit.Chem import Descriptors, Lipinski, rdMolDescriptors
+    from rdkit import Chem, RDLogger
+    from rdkit.Chem import Descriptors, Lipinski, rdFingerprintGenerator, rdMolDescriptors
     from rdkit.Chem.Scaffolds import MurckoScaffold
 
+    RDLogger.DisableLog("rdApp.*")
     HAS_RDKIT = True
-except ImportError:  # pragma: no cover - optional dependency fallback
+except ImportError:  # pragma: no cover - exercised in no-RDKit CI job
     Chem = None  # type: ignore[assignment]
     Descriptors = None  # type: ignore[assignment]
     Lipinski = None  # type: ignore[assignment]
+    rdFingerprintGenerator = None  # type: ignore[assignment]
     rdMolDescriptors = None  # type: ignore[assignment]
     MurckoScaffold = None  # type: ignore[assignment]
     HAS_RDKIT = False
 
-_RING_DIGITS_RE = re.compile(r"(?:%\d\d|\d)")
+
+@lru_cache(maxsize=8)
+def _get_morgan_generator(radius: int = 2, fp_size: int = 32):
+    if not HAS_RDKIT or rdFingerprintGenerator is None:
+        raise ImportError(
+            "RDKit is required for Morgan fingerprint featurization; install `lab-decide[chem]`."
+        )
+    return rdFingerprintGenerator.GetMorganGenerator(radius=int(radius), fpSize=int(fp_size))
 
 
 def normalize_smiles_str(smiles: str, *, canonicalize: bool = False) -> str:
@@ -48,6 +66,18 @@ def normalize_smiles_str(smiles: str, *, canonicalize: bool = False) -> str:
     if mol is None:
         raise ValueError(f"Invalid SMILES string could not be parsed by RDKit: {trimmed!r}")
     return str(Chem.MolToSmiles(mol, canonical=True))
+
+
+def canonical_group_smiles(smiles: str) -> str:
+    """Return canonical SMILES when RDKit is available and SMILES parses, else stripped string."""
+    clean = str(smiles).strip()
+    if not clean:
+        raise ValueError("Group SMILES string must not be empty")
+    if HAS_RDKIT:
+        mol = Chem.MolFromSmiles(clean)
+        if mol is not None:
+            return str(Chem.MolToSmiles(mol, canonical=True))
+    return clean
 
 
 def smiles_to_descriptors(smiles: str) -> dict[str, float]:
@@ -72,6 +102,60 @@ def smiles_to_descriptors(smiles: str) -> dict[str, float]:
     }
 
 
+@lru_cache(maxsize=16384)
+def smiles_to_morgan_physicochem(
+    smiles: str,
+    *,
+    radius: int = 2,
+    n_bits: int = 32,
+) -> tuple[float, ...]:
+    """Compute `(present, 6 RDKit physicochemical descriptors, n_bits Morgan FP)` via RDKit."""
+    if not HAS_RDKIT:
+        raise ImportError(
+            "RDKit is required for Morgan + physicochemical reagent encoding; install `lab-decide[chem]`."
+        )
+    clean = (smiles or "").strip()
+    dim = 1 + len(RDKIT_MOL_EXTRA_FEATURES) + int(n_bits)
+    if not clean or clean.upper() == "NONE" or clean.lower() == "nan":
+        return tuple(0.0 for _ in range(dim))
+    mol = Chem.MolFromSmiles(clean)
+    if mol is None:
+        # Handle organometallic complexes with dative/coordination bonds where full sanitization fails
+        mol = Chem.MolFromSmiles(clean, sanitize=False)
+        if mol is not None:
+            try:
+                mol.UpdatePropertyCache(strict=False)
+                Chem.GetSymmSSSR(mol)
+            except Exception:
+                mol = None
+    if mol is None:
+        return (1.0,) + tuple(0.0 for _ in range(dim - 1))
+
+    try:
+        mw = float(Descriptors.MolWt(mol))
+        logp = float(Descriptors.MolLogP(mol))
+        tpsa = float(rdMolDescriptors.CalcTPSA(mol))
+        hbd = float(Lipinski.NumHDonors(mol))
+        hba = float(Lipinski.NumHAcceptors(mol))
+        rings = float(rdMolDescriptors.CalcNumRings(mol))
+    except Exception:
+        mw = float(mol.GetNumHeavyAtoms() * 14.0)
+        logp = 0.0
+        tpsa = 0.0
+        hbd = 0.0
+        hba = 0.0
+        rings = 0.0
+
+    try:
+        gen = _get_morgan_generator(radius=radius, fp_size=n_bits)
+        fp_arr = np.asarray(gen.GetFingerprintAsNumPy(mol), dtype=np.float64)
+        fp_vals = tuple(float(x) for x in fp_arr.tolist())
+    except Exception:
+        fp_vals = tuple(0.0 for _ in range(int(n_bits)))
+
+    return (1.0, mw, logp, tpsa, hbd, hba, rings, *fp_vals)
+
+
 def featurize_smiles_batch(
     smiles_list: Sequence[str],
     *,
@@ -93,21 +177,35 @@ def featurize_smiles_batch(
 
 
 def murcko_scaffold_group(smiles: str) -> str:
-    """Return Bemis-Murcko scaffold SMILES (or deterministic topology signature without RDKit)."""
+    """Return exact RDKit Bemis-Murcko scaffold SMILES (`'acyclic'` for valid acyclic molecules).
+
+    Raises `ImportError` if RDKit is unavailable and `ValueError` if `smiles` cannot be parsed
+    as a single molecule (never falls back to regex ring-digit heuristics).
+    """
+    if not HAS_RDKIT:
+        raise ImportError(
+            "RDKit is required for Bemis-Murcko scaffold splitting (`strategy='scaffold'`); "
+            "install `lab-decide[chem]` (`pip install rdkit`) or use `--split group` / `--split random`."
+        )
+    if not isinstance(smiles, str):
+        raise ValueError(f"Expected string SMILES for scaffold computation, got {type(smiles).__name__}")
     clean = smiles.strip()
     if not clean:
-        return "empty"
-    if HAS_RDKIT:
-        mol = Chem.MolFromSmiles(clean)
-        if mol is not None:
-            scaf = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
-            return scaf if scaf else "acyclic"
-    # Deterministic pure-Python fallback grouping cyclic ring-closure signatures vs acyclic chains
-    rings = len(_RING_DIGITS_RE.findall(clean)) // 2
-    arom = sum(1 for c in clean if c in "cnos")
-    return f"fallback_r{rings}_a{arom > 0}"
+        raise ValueError("SMILES string must not be empty for Bemis-Murcko scaffold computation")
+    mol = Chem.MolFromSmiles(clean)
+    if mol is None:
+        raise ValueError(
+            f"Invalid SMILES string could not be parsed by RDKit for Bemis-Murcko scaffold: {clean!r}. "
+            "For multi-component formulations or reaction records, use `--split group`."
+        )
+    scaf = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
+    return str(scaf) if scaf else "acyclic"
 
 
 def compute_scaffold_groups(smiles_list: Sequence[str]) -> np.ndarray:
-    """Compute scaffold group labels for Bemis-Murcko scaffold splitting."""
+    """Compute exact RDKit Bemis-Murcko scaffold group labels (never uses regex fallback)."""
+    if not HAS_RDKIT:
+        raise ImportError(
+            "RDKit is required for compute_scaffold_groups(); install `lab-decide[chem]` (`pip install rdkit`)."
+        )
     return np.asarray([murcko_scaffold_group(s) for s in smiles_list], dtype=object)

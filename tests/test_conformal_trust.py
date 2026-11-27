@@ -178,7 +178,7 @@ def test_issue_04_smiles_whitespace_dedup_scaffold_split_and_rdkit_bridge() -> N
     assert len(bundle.y) == 40
     assert bundle.y[0] == pytest.approx(float(df[ESOL_TARGET].iloc[0]) + 0.5, abs=1e-4)
 
-    # Scaffold split ensures zero scaffold overlap across train / pool / cal / test
+    # Scaffold/group split ensures zero group overlap across train / pool / cal / test
     diverse_smiles = [
         "c1ccccc1" + "C" * (i % 3) if i < 10
         else "c1ccncc1" + "C" * (i % 3) if i < 20
@@ -187,15 +187,20 @@ def test_issue_04_smiles_whitespace_dedup_scaffold_split_and_rdkit_bridge() -> N
         else "CC(=O)O" + "C" * (i % 4)
         for i in range(50)
     ]
-    scaf_groups = compute_scaffold_groups(diverse_smiles)
-    sp = partition_splits(50, smiles=diverse_smiles, strategy="scaffold", seed=0)
-    g_tr = set(scaf_groups[sp.train_idx])
-    g_pool = set(scaf_groups[sp.pool_idx])
-    g_cal = set(scaf_groups[sp.cal_idx])
-    g_te = set(scaf_groups[sp.test_idx])
-    assert g_tr.isdisjoint(g_te) and g_cal.isdisjoint(g_te) and g_tr.isdisjoint(g_cal) and g_pool.isdisjoint(g_te)
+    explicit_groups = [f"grp_{i // 10}" for i in range(50)]
+    sp_grp = partition_splits(50, groups=explicit_groups, strategy="group", seed=0)
+    grp_arr = np.asarray(explicit_groups, dtype=object)
+    assert set(grp_arr[sp_grp.train_idx]).isdisjoint(set(grp_arr[sp_grp.test_idx]))
 
     if HAS_RDKIT:
+        scaf_groups = compute_scaffold_groups(diverse_smiles)
+        sp = partition_splits(50, smiles=diverse_smiles, strategy="scaffold", seed=0)
+        g_tr = set(scaf_groups[sp.train_idx])
+        g_pool = set(scaf_groups[sp.pool_idx])
+        g_cal = set(scaf_groups[sp.cal_idx])
+        g_te = set(scaf_groups[sp.test_idx])
+        assert g_tr.isdisjoint(g_te) and g_cal.isdisjoint(g_te) and g_tr.isdisjoint(g_cal) and g_pool.isdisjoint(g_te)
+
         desc = smiles_to_descriptors("c1ccccc1")
         assert desc["Minimum Degree"] == 2.0
         assert desc["Number of Rings"] == 1.0
@@ -204,6 +209,9 @@ def test_issue_04_smiles_whitespace_dedup_scaffold_split_and_rdkit_bridge() -> N
         assert mat.shape == (2, 6)
         with pytest.raises(ValueError, match="Invalid SMILES"):
             smiles_to_descriptors("not_a_valid_smiles_###")
+    else:
+        with pytest.raises(ImportError, match="RDKit"):
+            partition_splits(50, smiles=diverse_smiles, strategy="scaffold", seed=0)
 
 
 def test_issue_05_locally_adaptive_cqr_and_normalized_intervals_and_vector_summarize() -> None:

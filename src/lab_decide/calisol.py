@@ -9,8 +9,8 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from lab_decide.conformal import (
-    ConformalTrustModel,
     fit_and_calibrate,
+    spearman_rank_correlation,
     summarize,
     winkler_interval_score,
 )
@@ -79,7 +79,9 @@ def formulation_kernel_support(
     return math.exp(-d_min / support_scale), d_min
 
 
-def make_synthetic_calisol_records(n_per_split: tuple[int, int, int] = (140, 50, 50), seed: int = 0) -> list[dict[str, Any]]:
+def make_synthetic_calisol_records(
+    n_per_split: tuple[int, int, int] = (140, 50, 50), seed: int = 0
+) -> list[dict[str, Any]]:
     """Generate deterministic electrolyte conductivity records stratified by disjoint CALiSol DOIs."""
     rng = np.random.default_rng(seed)
     train_dois = [f"10.1149/train.{i:03d}" for i in range(6)]
@@ -99,7 +101,6 @@ def make_synthetic_calisol_records(n_per_split: tuple[int, int, int] = (140, 50,
             conc = float(rng.uniform(2.2, 3.5) if is_ood else rng.uniform(0.5, 1.8))
             ec_frac = float(rng.uniform(0.2, 0.7))
             solv = {"EC": round(ec_frac, 4), "DMC": round(1.0 - ec_frac, 4)}
-            # Arrhenius-like peak around c ~ 1.0 M and higher temperature
             base_k = 11.5 * math.exp(-((conc - 1.05) ** 2) / 0.9) * math.exp(0.012 * (t_k - 298.15))
             noise = rng.normal(0.0, 2.2 if is_ood else 0.55)
             k_val = max(0.05, base_k + noise)
@@ -135,7 +136,14 @@ def load_calisol_csv_records(csv_path: str) -> list[dict[str, Any]]:
                 conc = float(row["c"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if not (math.isfinite(k) and k >= 1e-4 and math.isfinite(conc) and conc >= 1e-3 and math.isfinite(t_k) and t_k > 0.0):
+            if not (
+                math.isfinite(k)
+                and k >= 1e-4
+                and math.isfinite(conc)
+                and conc >= 1e-3
+                and math.isfinite(t_k)
+                and t_k > 0.0
+            ):
                 continue
             raw_solv: dict[str, float] = {}
             bad = False
@@ -169,12 +177,10 @@ def load_calisol_csv_records(csv_path: str) -> list[dict[str, Any]]:
     return records
 
 
-def featurize_calisol_records(records: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Featurize electrolyte records into tabular descriptors predicting `log1p(k_mS_cm)`.
-
-    Includes explicit `salt_other` and `solv_other_mass` out-of-vocabulary residual columns
-    so unlisted salts (e.g. `NaPF6`) or solvents (e.g. `THF`) never collapse to zero vectors.
-    """
+def featurize_calisol_records(
+    records: Sequence[Mapping[str, Any]],
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Featurize electrolyte records into tabular descriptors predicting `log1p(k_mS_cm)`."""
     feat_names = (
         ["T_K", "c_mol", "log_c"]
         + [f"salt_{s}" for s in COMMON_SALTS]
@@ -222,14 +228,19 @@ def evaluate_calisol_conformal(
     seed: int = 0,
     max_records_per_split: int = 600,
     nonconformity: str = "normalized",
+    distance_metric: str = "euclidean",
 ) -> dict[str, Any]:
     """Evaluate Mondrian conformal gating vs CALiSol-23 formulation kernel support across DOI splits."""
-    if csv_path and os.path.exists(csv_path):
+    if csv_path is not None:
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"CALiSol-23 CSV not found: {csv_path}")
         records = load_calisol_csv_records(csv_path)
         source = "calisol23_csv"
+        data_source = "real_csv"
     else:
         records = make_synthetic_calisol_records(seed=seed)
         source = "synthetic_calisol_doi_fixture"
+        data_source = "synthetic_fixture"
 
     rng = np.random.default_rng(seed)
     sampled: list[dict[str, Any]] = []
@@ -246,6 +257,11 @@ def evaluate_calisol_conformal(
     cal_mask = splits == "cal"
     te_mask = splits == "test"
 
+    # Guarantee zero shared source DOIs across train, cal, and test
+    tr_dois = {r["doi"] for r in sampled if r["split"] == "train"}
+    cal_dois = {r["doi"] for r in sampled if r["split"] == "cal"}
+    te_dois = {r["doi"] for r in sampled if r["split"] == "test"}
+
     advisor = fit_and_calibrate(
         X[tr_mask],
         y[tr_mask],
@@ -255,6 +271,7 @@ def evaluate_calisol_conformal(
         trust_pct=trust_pct,
         seed=seed,
         nonconformity=nonconformity,
+        distance_metric=distance_metric,
         domain_bounds=(0.0, 6.0),
         feature_names=feat_names,
     )
@@ -262,8 +279,12 @@ def evaluate_calisol_conformal(
     yt = y[te_mask]
     inside = np.asarray(res["trusted"], dtype=bool)
     c_in, w_in, e_in = summarize(yt, res["lo"], res["hi"], inside, pred=res["pred"])
-    c_out, _, e_out = summarize(yt, res["lo"], res["hi"], ~inside, pred=res["pred"])
+    c_out, w_out, e_out = summarize(yt, res["lo"], res["hi"], ~inside, pred=res["pred"])
+    c_all, w_all, e_all = summarize(
+        yt, res["lo"], res["hi"], np.ones(len(yt), dtype=bool), pred=res["pred"]
+    )
     wink_in = winkler_interval_score(yt, res["lo"], res["hi"], alpha=alpha, mask=inside)
+    spearman_d = spearman_rank_correlation(res["distance"], np.abs(yt - res["pred"]))
 
     tr_recs = [r for r in sampled if r["split"] == "train"]
     te_recs = [r for r in sampled if r["split"] == "test"]
@@ -271,22 +292,36 @@ def evaluate_calisol_conformal(
         [formulation_kernel_support(r, tr_recs)[0] for r in te_recs],
         dtype=np.float64,
     )
-    # Gate agreement between kNN trust region (inside) and kernel support >= (100 - trust_pct)th percentile
     k_gate = kernel_supports >= np.percentile(kernel_supports, 100.0 - trust_pct)
     gate_agreement = float(np.mean(inside == k_gate))
 
     return {
+        "dataset_id": "calisol23",
         "source": source,
+        "data_source": data_source,
+        "split_strategy": "doi_holdout",
         "nonconformity": nonconformity,
+        "distance_metric": distance_metric,
         "n_train": int(np.sum(tr_mask)),
         "n_cal": int(np.sum(cal_mask)),
         "n_test": int(np.sum(te_mask)),
+        "n_groups_total": len(tr_dois | cal_dois | te_dois),
+        "group_counts": {
+            "train": len(tr_dois),
+            "calibration": len(cal_dois),
+            "test": len(te_dois),
+        },
         "answered_fraction": float(np.mean(inside)),
         "cov_in": c_in,
         "cov_out": c_out,
+        "cov_all": c_all,
         "mae_in": e_in,
         "mae_out": e_out,
+        "mae_all": e_all,
         "width_in": w_in,
+        "width_out": w_out,
+        "width_all": w_all,
         "winkler_in": wink_in,
+        "spearman_distance_abs_error": spearman_d,
         "knn_vs_kernel_support_agreement": gate_agreement,
     }

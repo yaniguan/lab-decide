@@ -16,15 +16,25 @@ jobs:
         with:
           path: data/delaney-processed.csv
           key: esol-delaney-v1-8c06a76f0c64
-      - name: Install package and test dependencies
-        run: pip install -r requirements.txt -e ".[dev,chem]"
+      - name: Install package and test dependencies (with RDKit and LightGBM)
+        run: pip install -r requirements.txt -e ".[dev,chem,bo]"
+      - name: Seed SHA-verified ESOL cache if absent
+        run: |
+          python -c "
+          import os, shutil
+          from lab_decide.data import BUNDLED_ESOL_RESOURCE_PATH, DEFAULT_DATA_PATH, ensure_esol_csv
+          if not os.path.exists(DEFAULT_DATA_PATH) and os.path.exists(BUNDLED_ESOL_RESOURCE_PATH):
+              os.makedirs(os.path.dirname(DEFAULT_DATA_PATH), exist_ok=True)
+              shutil.copyfile(BUNDLED_ESOL_RESOURCE_PATH, DEFAULT_DATA_PATH)
+          ensure_esol_csv(DEFAULT_DATA_PATH, offline=True)
+          "
       - name: Run offline unit test suite
-        run: pytest -q
+        run: pytest -p no:cacheprovider -v
       - name: Run ESOL conformal demo and verify numerical metrics against demo/output.txt
         run: |
           python demo/conformal_trust.py > /tmp/conformal_stdout.txt
           python -c '
-          import re, sys
+          import re
           ref_lines = open("demo/output.txt", encoding="utf-8").read().strip().splitlines()
           cur_lines = open("/tmp/conformal_stdout.txt", encoding="utf-8").read().strip().splitlines()
           assert len(ref_lines) == len(cur_lines), f"Line count mismatch: {len(ref_lines)} vs {len(cur_lines)}"
@@ -37,3 +47,35 @@ jobs:
                   assert abs(a - b) <= 5e-3, f"Line {idx} drift > 0.005 ({a} vs {b}):\n  ref: {r_line}\n  cur: {c_line}"
           print("Verified all numerical outputs within +-0.005 of demo/output.txt")
           '
+
+  no-rdkit:
+    name: test-without-rdkit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install core package without RDKit
+        run: pip install -r requirements.txt -e ".[dev]"
+      - name: Verify RDKit is absent and run test suite
+        run: |
+          python -c "import lab_decide; assert lab_decide.HAS_RDKIT is False"
+          pytest -p no:cacheprovider -v
+
+  lean:
+    name: lean4-formal-proofs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan and Lean 4.36.0 toolchain
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Build LabDecideLean and audit theorem axioms
+        working-directory: lean
+        run: |
+          lake build
+          lake env lean AuditAxioms.lean > /tmp/lean_axioms.txt
+          cat /tmp/lean_axioms.txt
+          python3 ../scripts/check_lean_axioms.py /tmp/lean_axioms.txt

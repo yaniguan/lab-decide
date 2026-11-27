@@ -1,6 +1,6 @@
 # `LabDecideLean` -- Formal L6 Conformal & Stepped Frontier Guardrails in Lean 4
 
-Self-contained Lean 4 (`leanprover/lean4:v4.36.0`, zero external dependencies, `0 sorry`, `0 axiom`) formalization of the `L6` conformal prediction and active frontier expansion invariants for `lab-decide`, synchronized with the central 15-repository formal specification in [`yaniguan/auto-lab/tree/main/lean`](https://github.com/yaniguan/auto-lab/tree/main/lean).
+Self-contained Lean 4 (`leanprover/lean4:v4.36.0`, zero external dependencies, `0 sorry`, no custom axioms) formalization of the `L6` conformal prediction and active frontier expansion invariants for `lab-decide`, synchronized with the central 15-repository formal specification in [`yaniguan/auto-lab/tree/main/lean`](https://github.com/yaniguan/auto-lab/tree/main/lean).
 
 ## Proved Theorems & Guardrails
 
