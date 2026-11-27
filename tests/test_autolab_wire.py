@@ -150,12 +150,16 @@ def test_issue_32_exact_parity_with_conformal_trust_model_on_seed0_esol_test_spl
             }
         )
         dec = out["decision"]
+        ref_1d = adv.predict(bundle.X[int(row_i)], use_mondrian=True)
         assert dec["distance_source"] == "fitted_esol_model"
-        assert dec["in_trust_region"] is bool(ref["trusted"][pos])
-        assert dec["abstain"] is (not bool(ref["trusted"][pos]))
-        assert dec["knn_distance"] == pytest.approx(float(ref["distance"][pos]), rel=0.0, abs=1e-12)
-        assert dec["predicted_log_s"] == pytest.approx(float(ref["pred"][pos]), rel=0.0, abs=1e-12)
-        assert dec["conformal_interval"] == [float(ref["lo"][pos]), float(ref["hi"][pos])]
+        assert dec["in_trust_region"] is bool(ref_1d["trusted"])
+        assert dec["abstain"] is (not bool(ref_1d["trusted"]))
+        assert dec["knn_distance"] == float(ref_1d["distance"])
+        assert dec["predicted_log_s"] == float(ref_1d["pred"])
+        assert dec["conformal_interval"] == [float(ref_1d["lo"]), float(ref_1d["hi"])]
+        assert dec["conformal_interval"] == pytest.approx(
+            [float(ref["lo"][pos]), float(ref["hi"][pos])], rel=0.0, abs=1e-12
+        )
 
         wire_trusted[pos] = bool(dec["in_trust_region"])
         wire_lo[pos] = float(dec["conformal_interval"][0])

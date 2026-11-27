@@ -81,7 +81,7 @@ jobs:
           python3 -c '
           import re
           src = open("LabDecideLean.lean", encoding="utf-8").read()
-          thms = re.findall(r"\btheorem\s+([A-Za-z0-9_]+)", src)
+          thms = re.findall(r"^(?:@\[[^\]]+\]\s*)*theorem\s+([A-Za-z_][A-Za-z0-9_']*)", src, flags=re.MULTILINE)
           assert len(thms) >= 20, f"Expected >= 20 theorems, found {len(thms)}"
           ax_out = open("/tmp/lean_axioms.txt", encoding="utf-8").read()
           assert "sorryAx" not in ax_out, f"sorryAx detected:\n{ax_out}"
