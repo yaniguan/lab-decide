@@ -4,18 +4,20 @@ from __future__ import annotations
 import hashlib
 import os
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+import lab_decide.chemistry as _chem_mod
 from lab_decide.chemistry import (
     ESOL_FEATURES,
     ESOL_TARGET,
-    HAS_RDKIT,
     compute_scaffold_groups,
+    featurize_rdkit_2d_morgan_batch,
+    get_rdkit_2d_morgan_feature_names,
     normalize_smiles_str,
 )
 
@@ -271,7 +273,7 @@ def validate_and_clean_dataframe(
     group_keys_out: list[str] | None = None
     if group_column is not None and group_column in work.columns:
         group_keys_out = [str(v).strip() for v in work[group_column].tolist()]
-    elif "smiles" in work.columns and HAS_RDKIT:
+    elif "smiles" in work.columns and _chem_mod.HAS_RDKIT:
         try:
             group_keys_out = compute_scaffold_groups(smiles_out).tolist()
         except ValueError:
@@ -303,8 +305,18 @@ def load_dataset(
     offline: bool = False,
     allow_synthetic: bool = False,
     min_rows: int = 4,
+    encoding: str = "descriptors",
 ) -> DatasetBundle:
     """Load ESOL (or custom CSV; synthetic fixture strictly opt-in via `allow_synthetic=True`)."""
+    if encoding not in ("descriptors", "rdkit_2d_morgan"):
+        raise ValueError(
+            f"Unknown encoding {encoding!r} for load_dataset(); expected 'descriptors' or 'rdkit_2d_morgan'"
+        )
+    if encoding == "rdkit_2d_morgan" and not _chem_mod.HAS_RDKIT:
+        raise ImportError(
+            "RDKit is required for encoding='rdkit_2d_morgan'; install `lab-decide[chem]` (`pip install rdkit`)."
+        )
+
     if csv_path is not None:
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"CSV file not found: {csv_path}")
@@ -323,7 +335,12 @@ def load_dataset(
             df = pd.read_csv(resolved)
             data_source = "real_csv"
 
-    return validate_and_clean_dataframe(
+    if encoding == "rdkit_2d_morgan" and "smiles" not in df.columns:
+        raise ValueError(
+            f"Dataset is missing 'smiles' column required for encoding='rdkit_2d_morgan'; columns: {list(df.columns)}"
+        )
+
+    bundle = validate_and_clean_dataframe(
         df,
         features=features,
         target=target,
@@ -332,6 +349,16 @@ def load_dataset(
         min_rows=min_rows,
         data_source=data_source,
     )
+    if encoding == "rdkit_2d_morgan":
+        X_mol = featurize_rdkit_2d_morgan_batch(bundle.smiles, strict=False)
+        if list(features) == list(ESOL_FEATURES) and bundle.X.shape[1] == len(ESOL_FEATURES):
+            X_mol[:, : len(ESOL_FEATURES)] = bundle.X
+        return replace(
+            bundle,
+            X=X_mol,
+            feature_names=list(get_rdkit_2d_morgan_feature_names()),
+        )
+    return bundle
 
 
 def load(

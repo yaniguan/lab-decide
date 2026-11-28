@@ -314,6 +314,23 @@ def test_committed_benchmark_jsons_and_readme_drift_guard() -> None:
         assert row["n_seeds"] >= 5
         assert row["data_source"] == "real_csv"
         assert isinstance(row["gate_informative"], bool)
+        assert row["gate_informative"] is True, f"Primary gate must be informative on {row['dataset_id']}"
+
+    assert "esol_delaney_20seed_head_to_head" in reg_payload
+    assert "molecular_encoding_comparison" in reg_payload
+    h2h_r = reg_payload["esol_delaney_20seed_head_to_head"]["random"]
+    h2h_s = reg_payload["esol_delaney_20seed_head_to_head"]["scaffold"]
+    front_r = h2h_r["models"]["frontier_rdkit_2d_morgan"]["metrics"]
+    front_s = h2h_s["models"]["frontier_rdkit_2d_morgan"]["metrics"]
+    del_s = h2h_s["models"]["delaney_2004_csv_formula"]["metrics"]
+    assert float(front_r["mae_all"]["mean"]) <= 0.44
+    assert float(front_r["mae_in"]["mean"]) <= 0.38
+    assert float(front_r["rmse_all"]["mean"]) <= 0.60
+    assert float(h2h_r["mae_reduction_vs_delaney_csv_pct"]) >= 35.0
+    assert float(h2h_r["mae_reduction_vs_gbdt_6desc_pct"]) >= 34.0
+    assert float(front_s["mae_all"]["mean"]) < float(del_s["mae_all"]["mean"])
+    assert h2h_r["models"]["frontier_rdkit_2d_morgan"]["gate_informative"] is True
+    assert h2h_s["models"]["frontier_rdkit_2d_morgan"]["gate_informative"] is True
 
     camp_payload = json.loads(camp_path.read_text(encoding="utf-8"))
     assert camp_payload["data_source"] == "real_csv"

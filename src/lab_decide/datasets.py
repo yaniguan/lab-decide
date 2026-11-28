@@ -13,7 +13,7 @@ import math
 import os
 import re
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -28,6 +28,7 @@ from lab_decide.calisol import (
     featurize_calisol_records,
     load_calisol_csv_records,
 )
+import lab_decide.chemistry as _chem_mod
 from lab_decide.chemistry import (
     ESOL_FEATURES,
     ESOL_TARGET,
@@ -35,6 +36,8 @@ from lab_decide.chemistry import (
     RDKIT_MOL_EXTRA_FEATURES,
     canonical_group_smiles,
     compute_scaffold_groups,
+    featurize_rdkit_2d_morgan_batch,
+    get_rdkit_2d_morgan_feature_names,
     smiles_to_morgan_physicochem,
 )
 from lab_decide.conformal import (
@@ -73,6 +76,18 @@ VALID_OBJECTIVE_DIRECTIONS: tuple[str, ...] = (
 
 VALID_HTE_ENCODINGS: tuple[str, ...] = (
     "descriptors",
+    "onehot",
+    "onehot_morgan",
+)
+
+VALID_MOLECULAR_ENCODINGS: tuple[str, ...] = (
+    "descriptors",
+    "rdkit_2d_morgan",
+)
+
+VALID_DATASET_ENCODINGS: tuple[str, ...] = (
+    "descriptors",
+    "rdkit_2d_morgan",
     "onehot",
     "onehot_morgan",
 )
@@ -1180,7 +1195,7 @@ def _load_calisol_jsonl_or_csv(path: str, fmt: str, max_rows: int | None) -> tup
 
 def _single_mol_group_keys(smiles_seq: Sequence[str]) -> list[str] | None:
     """Compute Bemis-Murcko scaffold group keys when RDKit is installed; None otherwise."""
-    if not HAS_RDKIT:
+    if not _chem_mod.HAS_RDKIT:
         return None
     return compute_scaffold_groups(smiles_seq).tolist()
 
@@ -1204,16 +1219,45 @@ def load_open_dataset(
     listed in `spec.leakage_excluded_columns` so downstream conformal calibration is leakage-free,
     and attaches explicit domain `group_keys` (never using regex fallback groups).
     """
-    if encoding not in VALID_HTE_ENCODINGS:
-        raise ValueError(f"Unknown encoding {encoding!r}; expected one of {VALID_HTE_ENCODINGS}")
+    if encoding not in VALID_DATASET_ENCODINGS:
+        raise ValueError(f"Unknown encoding {encoding!r}; expected one of {VALID_DATASET_ENCODINGS}")
     if data_source not in ("real_csv", "synthetic_fixture"):
         raise ValueError(f"data_source must be 'real_csv' or 'synthetic_fixture', got {data_source!r}")
 
     spec = get_open_dataset(dataset_id)
-    if spec.domain != "reaction_optimization" and encoding != "descriptors":
+    if encoding in ("onehot", "onehot_morgan") and spec.domain != "reaction_optimization":
         raise ValueError(
             f"Encoding {encoding!r} is only supported for reaction_optimization datasets, "
             f"not {spec.dataset_id!r} ({spec.domain})."
+        )
+    if encoding == "rdkit_2d_morgan":
+        if spec.group_kind != "murcko_scaffold":
+            raise ValueError(
+                f"Encoding 'rdkit_2d_morgan' is only supported for single-molecule benchmarks "
+                f"(group_kind='murcko_scaffold'), not {spec.dataset_id!r} (group_kind={spec.group_kind!r})."
+            )
+        if not _chem_mod.HAS_RDKIT:
+            raise ImportError(
+                f"RDKit is required for encoding='rdkit_2d_morgan' on dataset {spec.dataset_id!r}; "
+                "install `lab-decide[chem]` (`pip install rdkit`)."
+            )
+        base_bundle = load_open_dataset(
+            dataset_id,
+            path=path,
+            fmt=fmt,
+            target_column=target_column,
+            max_rows=max_rows,
+            deduplicate=deduplicate,
+            offline=offline,
+            min_rows=min_rows,
+            encoding="descriptors",
+            data_source=data_source,
+        )
+        X_mol = featurize_rdkit_2d_morgan_batch(base_bundle.smiles, strict=False)
+        return replace(
+            base_bundle,
+            X=X_mol,
+            feature_names=list(get_rdkit_2d_morgan_feature_names()),
         )
 
     if path is None:
@@ -1833,6 +1877,7 @@ def calibrate_open_dataset(
         "data_source": bundle.data_source,
         "split_strategy": split_strategy,
         "encoding": encoding,
+        "surrogate": surrogate,
         "distance_metric": distance_metric,
         "nonconformity": nonconformity,
         "n_clean": len(bundle.y),
@@ -1855,6 +1900,7 @@ def calibrate_open_dataset(
         "mae_in": e_in,
         "mae_out": e_out,
         "mae_all": e_all,
+        "rmse_all": float(np.sqrt(np.mean((y_te - np.asarray(res["pred"], dtype=np.float64)) ** 2))),
         "width_in": w_in,
         "width_out": w_out,
         "width_all": w_all,
