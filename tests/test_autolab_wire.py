@@ -126,7 +126,11 @@ def test_issue_32_c60_cyclosporin_and_sucrose_abstain_without_knn_distance() -> 
 
 @pytest.mark.skipif(not HAS_RDKIT, reason="RDKit required for SMILES descriptor scoring")
 def test_issue_32_exact_parity_with_conformal_trust_model_on_seed0_esol_test_split() -> None:
-    bundle = load_dataset(csv_path=BUNDLED_ESOL_RESOURCE_PATH, offline=True)
+    bundle = load_dataset(
+        csv_path=BUNDLED_ESOL_RESOURCE_PATH,
+        offline=True,
+        encoding="rdkit_2d_morgan",
+    )
     splits = partition_splits(len(bundle.y), strategy="random", seed=0, fracs=(0.50, 0.20, 0.15, 0.15))
     adv = get_cached_esol_model(BUNDLED_ESOL_RESOURCE_PATH)
 
@@ -150,9 +154,11 @@ def test_issue_32_exact_parity_with_conformal_trust_model_on_seed0_esol_test_spl
             }
         )
         dec = out["decision"]
-        x_rdkit = featurize_smiles_batch([smi])[0]
+        x_rdkit = featurize_smiles_batch([smi], feature_names=adv.feature_names)[0]
         ref_rdkit = adv.predict(x_rdkit, use_mondrian=True)
         ref_csv_1d = adv.predict(bundle.X[int(row_i)], use_mondrian=True)
+        assert dec["model_encoding"] == "rdkit_2d_morgan"
+        assert dec["surrogate"] == "frontier_ensemble"
         assert dec["distance_source"] == "fitted_esol_model"
         assert dec["in_trust_region"] is bool(ref_rdkit["trusted"])
         assert dec["in_trust_region"] is bool(ref_csv_1d["trusted"])
@@ -171,8 +177,16 @@ def test_issue_32_exact_parity_with_conformal_trust_model_on_seed0_esol_test_spl
         wire_hi[pos] = float(dec["conformal_interval"][1])
         wire_pred[pos] = float(dec["predicted_log_s"])
 
-    cov_in, _, _ = summarize(bundle.y[te_idx], wire_lo, wire_hi, wire_trusted, pred=wire_pred)
-    assert cov_in >= 0.88
+    cov_in, width_in, mae_in = summarize(
+        bundle.y[te_idx], wire_lo, wire_hi, wire_trusted, pred=wire_pred
+    )
+    _, _, mae_all = summarize(
+        bundle.y[te_idx], wire_lo, wire_hi, np.ones(len(te_idx), dtype=bool), pred=wire_pred
+    )
+    assert cov_in >= 0.89
+    assert mae_in <= 0.43
+    assert mae_all <= 0.48
+    assert width_in <= 2.20
     assert 0.10 <= float(np.mean(~wire_trusted)) <= 0.25
 
 
@@ -262,6 +276,33 @@ def test_issue_32_distance_source_upstream_and_residual_gated_ledger_recalibrati
     )
     assert recal_ok["decision"]["effective_n_calib"] == 174
     assert recal_ok["decision"]["effective_threshold"] > adv.threshold
+
+    # Hub 15-repo wire check contract: diethyl malonate abstains at Round 1 (0.681541 > 0.675015)
+    # and unlocks at Round 2 (threshold -> 0.682118, n_calib -> 170) after certified benzotriazole (-0.78).
+    dm_r1 = process_packet({"candidate_smiles": "CCOC(=O)CC(=O)OCC"})
+    assert dm_r1["halted"] is True and dm_r1["halt_reason"] == "L6_ABSTAIN"
+    assert round(float(dm_r1["decision"]["effective_threshold"]), 6) == pytest.approx(0.675015, abs=1e-5)
+
+    dm_r2 = process_packet(
+        {
+            "candidate_smiles": "CCOC(=O)CC(=O)OCC",
+            "certified_ledger_entries": [
+                {
+                    "run_id": "wire-shell-probe-001",
+                    "candidate_smiles": "c2ccc1[nH]nnc1c2",
+                    "measured_y": -0.78,
+                    "admit_to_memory": True,
+                    "ledger_entry_sha256": "d" * 64,
+                }
+            ],
+        }
+    )
+    assert dm_r2["halted"] is False and dm_r2["decision"]["abstain"] is False
+    assert dm_r2["decision"]["effective_n_calib"] == 170
+    assert round(float(dm_r2["decision"]["effective_threshold"]), 6) == pytest.approx(0.682118, abs=1e-5)
+
+    cyclo_out = process_packet({"candidate_smiles": CYCLOSPORIN_A_SMILES})
+    assert cyclo_out["halted"] is True and float(cyclo_out["decision"]["knn_distance"]) > 10.0
 
 
 @pytest.mark.skipif(not HAS_RDKIT, reason="RDKit required for SMILES descriptor scoring")

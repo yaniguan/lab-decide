@@ -17,6 +17,8 @@ from lab_decide.acquisition import (
 from lab_decide.calisol import evaluate_calisol_conformal
 from lab_decide.chemistry import ESOL_FEATURES, ESOL_TARGET, featurize_smiles_batch
 from lab_decide.conformal import (
+    VALID_DISTANCE_METRICS,
+    VALID_SURROGATES,
     ConformalTrustModel,
     fit_and_calibrate,
     spearman_rank_correlation,
@@ -29,7 +31,7 @@ from lab_decide.data import (
 )
 from lab_decide.datasets import (
     OPEN_CALIBRATION_DATASETS,
-    VALID_HTE_ENCODINGS,
+    VALID_DATASET_ENCODINGS,
     calibrate_open_dataset,
     default_dataset_cache_path,
     fetch_open_dataset,
@@ -71,6 +73,7 @@ def run_esol_benchmark(
     seed: int = 0,
     nonconformity: str = "normalized",
     distance_metric: str = "euclidean",
+    surrogate: str = "gbdt",
     domain_bounds: tuple[float, float] | None = (-15.0, 1.75),
 ) -> tuple[dict[str, Any], ConformalTrustModel, np.ndarray]:
     """Run full 4-way split Mondrian conformal + frozen-test active expansion + single-batch ranking."""
@@ -97,6 +100,7 @@ def run_esol_benchmark(
         nonconformity=nonconformity,
         distance_weighting="importance",
         distance_metric=distance_metric,
+        surrogate=surrogate,
         domain_bounds=domain_bounds,
         feature_names=bundle.feature_names,
     )
@@ -109,6 +113,7 @@ def run_esol_benchmark(
     cov_marg, width_marg, mae_marg = summarize(
         yt, res_marg["lo"], res_marg["hi"], all_mask, pred=res_marg["pred"]
     )
+    rmse_marg = float(np.sqrt(np.mean((yt - np.asarray(res_marg["pred"], dtype=np.float64)) ** 2)))
 
     res_mond = advisor0.predict(X[te_idx], use_mondrian=True)
     inside = np.asarray(res_mond["trusted"], dtype=bool)
@@ -134,6 +139,7 @@ def run_esol_benchmark(
         nonconformity=nonconformity,
         distance_weighting="importance",
         distance_metric=distance_metric,
+        surrogate=surrogate,
         domain_bounds=domain_bounds,
         feature_names=bundle.feature_names,
     )
@@ -154,6 +160,7 @@ def run_esol_benchmark(
         "deduplicated_smiles": bundle.deduplicated_count,
         "dropped_nonfinite": bundle.dropped_nonfinite_count,
         "split_strategy": split_strategy,
+        "surrogate": surrogate,
         "splits": {
             "train": int(splits.train_idx.size),
             "pool": int(splits.pool_idx.size),
@@ -175,6 +182,7 @@ def run_esol_benchmark(
             "coverage": cov_marg,
             "mean_width": width_marg,
             "mae": mae_marg,
+            "rmse": rmse_marg,
         },
         "mondrian_trust_region": {
             "threshold": advisor0.threshold,
@@ -208,7 +216,11 @@ def format_esol_report(summary: Mapping[str, Any]) -> str:
         f"data_source={data_source}) | "
         f"train {sp['train']} / pool {sp['pool']} / calibration {sp['calibration']} / test {sp['test']}"
     )
-    lines.append(f"Features: {', '.join(summary['features'])}")
+    feats = summary["features"]
+    if len(feats) <= 12:
+        lines.append(f"Features: {', '.join(feats)}")
+    else:
+        lines.append(f"Features ({len(feats)}D): {', '.join(feats[:6])}, ... (+{len(feats) - 6} molecular features)")
     lines.append("")
     lines.append(f"== Split conformal (target {target_pct}%, domain-clipped) ==")
     lines.append(
@@ -300,13 +312,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--encoding",
-        choices=VALID_HTE_ENCODINGS,
+        choices=VALID_DATASET_ENCODINGS,
         default="descriptors",
-        help="Reaction feature encoding ('descriptors', 'onehot', or 'onehot_morgan').",
+        help="Feature encoding ('descriptors', 'rdkit_2d_morgan', 'onehot', or 'onehot_morgan').",
+    )
+    parser.add_argument(
+        "--surrogate",
+        choices=VALID_SURROGATES,
+        default="gbdt",
+        help="Point/quantile surrogate model ('gbdt', 'hist_gbdt', 'lightgbm', or 'frontier_ensemble').",
     )
     parser.add_argument(
         "--distance-metric",
-        choices=("euclidean", "mahalanobis", "ensemble_mahalanobis"),
+        choices=VALID_DISTANCE_METRICS,
         default="euclidean",
         help="Applicability-domain distance metric.",
     )
@@ -326,7 +344,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--smiles",
         type=str,
         default=None,
-        help="Comma-separated SMILES strings to score via RDKit 6D descriptor bridge.",
+        help="Comma-separated SMILES strings to score via RDKit descriptor bridge.",
     )
     parser.add_argument(
         "--probes-jsonl",
@@ -381,8 +399,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.dataset == "calisol23":
-            # When --split group or --split random is explicitly requested via the general open-dataset
-            # calibrator, wait: if default --dataset calisol23 is called, use cached/fetched calisol23.csv!
             resolved_cal_csv = args.csv
             if resolved_cal_csv is None:
                 cached_cal = default_dataset_cache_path("calisol23")
@@ -457,6 +473,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     offline=args.offline,
                     encoding=args.encoding,
                     distance_metric=args.distance_metric,
+                    surrogate=args.surrogate,
                     data_source=ds_source,
                 )
                 if args.export_decisions:
@@ -490,6 +507,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         if args.dataset == "synthetic":
+            from dataclasses import replace as _dc_replace
+            from lab_decide.chemistry import featurize_rdkit_2d_morgan_batch, get_rdkit_2d_morgan_feature_names
             from lab_decide.data import make_synthetic_solubility_dataframe, validate_and_clean_dataframe
 
             bundle = validate_and_clean_dataframe(
@@ -498,6 +517,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 target=args.target,
                 data_source="synthetic_fixture",
             )
+            if args.encoding == "rdkit_2d_morgan":
+                X_syn_mol = featurize_rdkit_2d_morgan_batch(bundle.smiles, strict=False)
+                bundle = _dc_replace(
+                    bundle,
+                    X=X_syn_mol,
+                    feature_names=list(get_rdkit_2d_morgan_feature_names()),
+                )
         else:
             bundle = load_dataset(
                 csv_path=args.csv,
@@ -505,6 +531,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 target=args.target,
                 offline=args.offline,
                 allow_synthetic=args.allow_synthetic,
+                encoding=args.encoding,
             )
 
         summary, final_advisor, te_idx = run_esol_benchmark(
@@ -518,6 +545,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed=args.seed,
             nonconformity=args.nonconformity,
             distance_metric=args.distance_metric,
+            surrogate=args.surrogate,
         )
 
         if args.smiles:

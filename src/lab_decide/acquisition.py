@@ -105,6 +105,7 @@ def run_expansion_campaign(
     nonconformity: str = "normalized",
     distance_weighting: str = "importance",
     distance_metric: str = "euclidean",
+    surrogate: str = "gbdt",
     domain_bounds: tuple[float, float] | None = (-15.0, 1.75),
     feature_names: Sequence[str] | None = None,
     reweight_covariate_shift: bool = True,
@@ -131,6 +132,7 @@ def run_expansion_campaign(
         nonconformity=nonconformity,
         distance_weighting=distance_weighting,
         distance_metric=distance_metric,
+        surrogate=surrogate,
         domain_bounds=domain_bounds,
         feature_names=feature_names,
     )
@@ -183,6 +185,7 @@ def run_expansion_campaign(
                 nonconformity=nonconformity,
                 distance_weighting=distance_weighting,
                 distance_metric=distance_metric,
+                surrogate=surrogate,
                 domain_bounds=domain_bounds,
                 feature_names=feature_names,
                 cal_weights=cal_w,
@@ -389,9 +392,20 @@ class TrustRegionAdvisor:
         fit_z = np.asarray(self.model.nn._fit_X, dtype=np.float64)
         if self.model.whitening_matrix is not None:
             pinv = np.linalg.pinv(self.model.whitening_matrix)
-            return (fit_z @ pinv) * self.model.scaler_scale + self.model.scaler_mean
-        safe_w = np.where(self.model.feature_weights > 1e-12, self.model.feature_weights, 1.0)
-        return (fit_z / safe_w) * self.model.scaler_scale + self.model.scaler_mean
+            gate_x = (fit_z @ pinv) * self.model.scaler_scale + self.model.scaler_mean
+        else:
+            safe_w = np.where(self.model.feature_weights > 1e-12, self.model.feature_weights, 1.0)
+            gate_x = (fit_z / safe_w) * self.model.scaler_scale + self.model.scaler_mean
+        exp_dim = self.model.expected_input_dim
+        if gate_x.shape[1] == exp_dim:
+            return gate_x
+        rem = exp_dim - gate_x.shape[1]
+        if (
+            self.model.tanimoto_ref_fp is not None
+            and self.model.tanimoto_ref_fp.shape == (gate_x.shape[0], rem)
+        ):
+            return np.hstack([gate_x, self.model.tanimoto_ref_fp])
+        return np.hstack([gate_x, np.zeros((gate_x.shape[0], rem), dtype=np.float64)])
 
 
 def benchmark_trust_region_bo(

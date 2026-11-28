@@ -7,12 +7,12 @@
 ## 1. Object
 
 ### Problem Statement
-Self-driving laboratories rely on surrogate models and Bayesian optimization (BO) loops to recommend reaction conditions, formulations, and candidate molecules. Standard surrogates fail silently outside their training manifold—returning overconfident point predictions or miscalibrated Gaussian process variances on unfamiliar scaffolds—while unconstrained acquisition functions routinely propose unsafe or out-of-distribution (OOD) experiments.
+Self-driving laboratories rely on surrogate models and Bayesian optimization (BO) loops to recommend reaction conditions, formulations, and candidate molecules. Standard surrogates fail silently outside their training manifold—returning overconfident point predictions or miscalibrated Gaussian process variances on unfamiliar scaffolds—while unconstrained acquisition functions routinely propose unsafe or out-of-distribution (OOD) experiments. Conversely, calibrating uncertainty on top of an under-expressive 6-descriptor tabular tree model leaves interval widths needlessly wide and point accuracy no better than classical linear group-contribution formulas.
 
-`lab-decide` builds an **epistemic experiment advisor that knows where it can be trusted**:
-1. Inside its empirical domain of applicability, it returns **distribution-free calibrated prediction intervals** at a user-specified target coverage ($1 - \alpha$).
-2. Outside its trust region, it emits an explicit **"I don't know" abstention** rather than a poorly supported guess.
-3. As new wet-lab measurements arrive at the boundary of the known manifold, it **recalibrates and expands its trusted region**.
+`lab-decide` builds an **epistemic experiment advisor that pairs frontier molecular accuracy with distribution-free trust boundaries**:
+1. Inside its empirical domain of applicability, it returns **distribution-free calibrated prediction intervals** at a user-specified target coverage ($1 - \alpha$) backed by a semiparametric molecular ensemble (`rdkit_2d_morgan + frontier_ensemble`) that cuts test MAE by `38.5%` relative to Delaney's (2004) ESOL linear formula and `46.7%` on FreeSolv hydration free energies.
+2. Outside its trust region, it emits an explicit **"I don't know" abstention** (`ABSTAIN_ACQUIRE` / `L6_ABSTAIN`) rather than an uncalibrated extrapolation.
+3. As new wet-lab measurements arrive at the boundary of the known manifold, it **recalibrates and expands its trusted region** while holding held-out evaluation splits strictly untouched.
 
 ### Role in the Auto-Lab `L0`–`L6` Hierarchy
 Within the [Auto-Lab](https://github.com/yaniguan/auto-lab) Brain/Body architecture (`L0`–`L6`), `lab-decide` serves as the quantitative uncertainty and experimental decision gate in **`L6 · Metacognitive & Epistemic Brain`**:
@@ -20,43 +20,33 @@ Within the [Auto-Lab](https://github.com/yaniguan/auto-lab) Brain/Body architect
 - **Upstream (`L0`–`L3` Surrogates & Calibrated Post-Trained Policies)**: Consumes molecular/reaction representations and calibrated observable predictors from [`WignerFlow`](https://github.com/yaniguan/WignerFlow), [`assayfold`](https://github.com/yaniguan/assayfold), [`YLM`](https://github.com/yaniguan/YLM), and [`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain) (`L3` `ScalarObservableTemplate`, `InverseDesignSupportTemplate`, and `CALiSol-23` support-gated electrolyte environments).
 - **Downstream (`L5` / `L4` Campaign Planning & Default-Deny Execution)**: Gates experiment proposals flowing into [`labshift`](https://github.com/yaniguan/labshift) and [`buy-or-make`](https://github.com/yaniguan/buy-or-make) (`L5` scheduling and synthesis-vs-procurement decisions), which must then pass [`lab-rehearsal`](https://github.com/yaniguan/lab-rehearsal) and [`lab-verify`](https://github.com/yaniguan/lab-verify) (`L4`) prior to benchtop execution (`stepbot`, `lab-hands`, `lab-feet`).
 
-### Inputs, Outputs, and Scope Boundaries
-- **Inputs**:
-  - Tabular molecular/experimental descriptor matrix $X \in \mathbb{R}^{N \times 6}$ and measured continuous scalar observable $y \in \mathbb{R}^N$ (`measured log solubility in mols per litre` from ESOL `delaney-processed.csv`).
-- **Outputs**:
-  - Split conformal half-width $\hat{q}$ (`1.522` $\log_{10}\text{mol/L}$ at `90%` target coverage), empirical test coverage (`0.912`), interval width (`3.044`), and MAE (`0.704`).
-  - Standardized 5-NN distance trust threshold $\tau$ (`0.758`, 80th percentile of calibration distances), binary answer/abstain mask (`inside`), and stratified metrics inside (`MAE 0.656`, coverage `0.922`) vs. outside (`MAE 0.892`, coverage `0.870`) the trust region.
-  - Multi-round active boundary-expansion table tracking training size, answered fraction, stratified coverage, MAE, and interval width across rounds `0`–`3`.
-- **Scope Boundaries**:
-  - `demo/conformal_trust.py` implements **homoscedastic split conformal prediction + $k$-NN distance abstention + boundary-point acquisition** on CPU (`numpy`, `pandas`, `scikit-learn`).
-  - Locally adaptive conformal intervals (Conformalized Quantile Regression / studentized residuals), strict separation between an unlabeled acquisition pool and a frozen held-out test set, and closed-loop `BoTorch` / `TuRBO` / `SafeOpt` Bayesian optimization inside the trust region are explicitly documented as **roadmapped next steps, not yet implemented**.
+### Inputs, Outputs, and Operating Modes
+- **Dual Molecular Operating Modes**:
+  - **Frontier Molecular Mode (`encoding="rdkit_2d_morgan"`, `surrogate="frontier_ensemble"`, `distance_metric="tanimoto_mahalanobis"`, `nonconformity="cqr_r"`)**: Extracts `1,416` molecular features (`6` ESOL descriptors + `4` intensive ratios + `215` standardized `RDKit` 2D physicochemical descriptors + `167` `MACCS` structural keys + `1,024`-bit radius-2 count-Morgan fingerprints in `log1p` space), fits the 7-component semiparametric `FrontierEnsembleRegressor` + centered `ResidualQuantileBandModel`, and gates predictions via hybrid descriptor $k$-NN + continuous Tanimoto $k$-NN + cross-family epistemic disagreement.
+  - **No-RDKit Core Tabular Mode (`encoding="descriptors"`, `surrogate="gbdt"`)**: Preserves deterministic pure-Python/NumPy/scikit-learn compatibility (`demo/conformal_trust.py`, `demo/output.txt`, and `.github/workflows/demo.yml` `test-without-rdkit` CI job) on pre-computed tabular descriptors.
 
 ---
 
 ## 2. Data
 
 ### Active Benchmark Dataset: ESOL Aqueous Solubility (Delaney 2004)
-`demo/conformal_trust.py` downloads `delaney-processed.csv` (`96,699` bytes) on demand from DeepChem S3 (`https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/delaney-processed.csv`) into gitignored `data/delaney-processed.csv`:
+`lab-decide` verifies `delaney-processed.csv` (`96,699` bytes, bundled offline at `src/lab_decide/resources/delaney-processed.csv`) against `ESOL_SHA256`:
 
 | Attribute | Value / Specification |
 |---|---|
-| **Total Records** | `1,128` small organic compounds (`10` CSV columns) |
-| **Input Features (`FEATURES`, $d=6$)** | `Minimum Degree`, `Molecular Weight`, `Number of H-Bond Donors`, `Number of Rings`, `Number of Rotatable Bonds`, `Polar Surface Area` |
-| **Target (`TARGET`)** | `measured log solubility in mols per litre` ($\log_{10} S \in [-11.60, 1.58]$, mean $-3.05$, std $2.10$) |
-| **Leakage Prevention** | Explicitly excludes the CSV's pre-fitted `ESOL predicted log solubility in mols per litre` linear-model column |
-| **Split Protocol (`SEED = 0`)** | Two-stage random `train_test_split`: **`676` train (`60%`) / `226` calibration (`20%`) / `226` test (`20%`)** |
-| **Reference Capture** | `demo/output.txt` (`19` lines, Linux CPU `2026-11-18`) |
-| **License & Provenance** | Public research benchmark; cite Delaney, *J. Chem. Inf. Comput. Sci.* 2004, 44(3), 1000–1005 (`10.1021/ci034243x`) |
-
-- **Empirical Dataset Characteristics**:
-  - `Minimum Degree` is highly skewed (`1` on `1,060 / 1,128 = 94.0%` of compounds, `2` on `67` unsubstituted ring systems, `0` on `1` single-heavy-atom compound).
-  - Stripping trailing whitespace on the `smiles` column reveals `5` duplicate SMILES entries in `delaney-processed.csv`; uniform index splitting does not enforce Bemis-Murcko scaffold disjointness.
+| **Total Records** | `1,128` raw records (`1,123` unique compounds after stripping trailing SMILES whitespace and averaging `5` duplicates) |
+| **Tabular Features (`descriptors`, $d=6$)** | `Minimum Degree`, `Molecular Weight`, `Number of H-Bond Donors`, `Number of Rings`, `Number of Rotatable Bonds`, `Polar Surface Area` |
+| **Frontier Features (`rdkit_2d_morgan`, $d=1,416$)** | `6` ESOL descriptors + `4` intensive ratios (`arom_atom_prop`, `hetero_atom_prop`, `halogen_atom_prop`, `log1p_heavy_atoms`) + `215` clipped `RDKit` 2D descriptors + `167` `MACCS` keys + `1,024` `log1p` radius-2 Morgan counts |
+| **Target (`ESOL_TARGET`)** | `measured log solubility in mols per litre` ($\log_{10} S \in [-11.60, 1.58]$, mean $-3.05$, std $2.10$) |
+| **Leakage Prevention** | Strictly excludes `ESOL predicted log solubility in mols per litre` during training; evaluates Delaney's column solely as an external baseline |
+| **4-Way Disjoint Split (`50/20/15/15`)** | `561` train / `224` candidate acquisition pool / `169` calibration / `169` held-out test (`random` and balanced Bemis-Murcko `scaffold`) |
+| **License & Provenance** | MIT; cite Delaney, *J. Chem. Inf. Comput. Sci.* 2004, 44(3), 1000-1005 (`10.1021/ci034243x`) |
 
 ### Open Calibration Dataset Registry (`src/lab_decide/datasets.py` & `scripts/fetch_open_datasets.py`)
-In addition to the default ESOL benchmark, `lab-decide` provides a typed `OpenCalibrationDataset` registry (`OPEN_CALIBRATION_DATASETS`) covering **`11` live-verified open-source datasets** across molecular solubility, electrolyte solvation, ADMET, and high-throughput reaction optimization (Bayesian optimization). Every entry carries verified SPDX open licensing (`commercial_use_ok = True`), optional SHA-256 pinning, on-demand atomic caching under gitignored `data/`, and deterministic leakage-free CSV/TSV/JSON/JSONL schema loaders feeding `fit_and_calibrate`, `ConformalTrustModel`, and `TrustRegionAdvisor`:
+`OPEN_CALIBRATION_DATASETS` covers **`11` live-verified open-source datasets** across molecular solubility, electrolyte solvation, ADMET, and high-throughput reaction optimization, with explicit `objective_direction`, explicit domain `group_keys` (zero regex fallback groups), and strict `data_source` provenance (`real_csv` vs opt-in `synthetic_fixture`):
 
 | `dataset_id` | Domain | Target (`target_unit`) | `n_records` | SPDX License | Leakage Exclusions | Primary Citation / Provenance |
-|---|---|---|---:|---|---|---|
+|---|---|---|---|---|---:|---|---|
 | `esol_delaney` | `molecular_solubility` | `log10(mol/L)` | `1,128` | `MIT` | `ESOL predicted log solubility...` | Delaney, *JCICS* 2004 (`10.1021/ci034243x`) |
 | `aqsoldb` | `molecular_solubility` | `log10(mol/L)` | `9,982` | `CC0-1.0` | `SD`, `Ocurrences`, `Group` | Sorkun et al., *Sci. Data* 2019 (`10.1038/s41597-019-0151-1`; Dataverse `10.7910/DVN/OVHAW8`) |
 | `bigsoldb_v2_2` | `molecular_solubility` | `log10(mol/L)` | `125,752` | `CC-BY-4.0` | `Solubility(mol/L)`, `Solubility(mole_fraction)`, `LogS(mole_fraction)` | Krasnov et al., *Sci. Data* 2025 / Zenodo 2026 (`10.5281/zenodo.22648301`) |
@@ -69,96 +59,82 @@ In addition to the default ESOL benchmark, `lab-decide` provides a typed `OpenCa
 | `direct_arylation_shields` | `reaction_optimization` | `yield_pct` | `1,728` | `Apache-2.0` | Row index `entry` | Shields et al., *Nature* 2021 (`10.1038/s41586-021-03213-y`; EDBO / BayBE) |
 | `bh_hte_ood_2026` | `reaction_optimization` | `yield_pct` | `27,497` | `CC-BY-4.0` | Binary threshold `labels`, `DRFP`, `QM`, cluster IDs | Neves et al., *Nat. Comput. Sci.* 2026 (`10.1038/s43588-026-01017-6`; Zenodo `19636649`) |
 
-### Curated Optimization & Conformal Ecosystem Catalog
-`README.md` curates:
-- **11 Integrated Open Calibration Datasets + 4 Optimization Suites**: Spanning `ESOL`, `AqSolDB`, `BigSolDB 2.2`, `CALiSol-23`, `FreeSolv`, `Lipophilicity_AstraZeneca`, `Biogen Computational-ADME`, `Doyle Buchwald-Hartwig HTE`, `Perera Suzuki-Miyaura HTE`, `Shields Direct Arylation`, and `BH-HTE-OOD 2026`, alongside `EDBO`, `EDBO+`, `rxn_yields`, and `Olympus`.
-- **12 Open-Source BO & Conformal Libraries**: `botorch`, `Ax`, `MAPIE`, `awesome-conformal-prediction`, `aangelopoulos/conformal-prediction`, `baybe`, `TuRBO`, `edbo`, `summit`, `SafeOpt`, `olympus`, and `gryffin`.
-- **12 Foundational & 2024–2026 Papers**: Spanning Snoek et al. (2012), `BoTorch` (`arXiv:1910.06403`), `TuRBO` (`arXiv:1910.01739`), `SafeOpt` (`arXiv:1509.01066`), Angelopoulos & Bates (`arXiv:2107.07511`), Conformal BO (`arXiv:2210.12496`, `arXiv:2306.17815`, `arXiv:2411.17387`), Safe Counterfactual BO (`arXiv:2607.05620`), and Physical SDL Testbeds (`arXiv:2611.11690`).
-
 ---
 
 ## 3. Model
 
-`demo/conformal_trust.py` couples three classical statistical components in `fit_and_calibrate`:
+`fit_and_calibrate` (`src/lab_decide/conformal.py`) integrates three statistical layers strictly fitted on `(X_tr, y_tr)` and calibrated on disjoint `(X_cal, y_cal)`:
 
-1. **Tabular Surrogate Regressor**:
-   - `GradientBoostingRegressor(random_state=0)` (`n_estimators=100`, `learning_rate=0.1`, `max_depth=3`, squared-error loss) fit strictly on `(X_tr, y_tr)`.
-2. **Distribution-Free Split Conformal Calibrator**:
-   - Computes nonconformity scores $s_i = |y_{\text{cal},i} - \hat{f}(x_{\text{cal},i})|$ for $i = 1, \dots, n_{\text{cal}}$ ($n_{\text{cal}} = 226$).
-   - Applies the finite-sample conformal quantile level:
-     $$\text{level} = \min\!\left(1.0,\; \frac{\lceil(n_{\text{cal}} + 1)(1 - \alpha)\rceil}{n_{\text{cal}}}\right), \qquad \alpha = 0.10$$
-     via `np.quantile(scores, level, method="higher")`, yielding prediction intervals $\hat{C}(x) = [\hat{f}(x) - \hat{q},\; \hat{f}(x) + \hat{q}]$ of width $2\hat{q}$.
-3. **Standardized $k$-NN Applicability-Domain Gate ("Answer or Abstain")**:
-   - Fits `StandardScaler` on `X_tr` and `NearestNeighbors(n_neighbors=5)` in standardized 6D descriptor space.
-   - Defines point-to-manifold distance $d(x) = \frac{1}{K}\sum_{j=1}^K \| \tilde{x} - \tilde{x}_{\text{tr},(j)} \|_2$ ($K = 5$).
-   - Sets the trust boundary $\tau$ to the `TRUST_PCT = 80`th percentile of $\{d(x) : x \in X_{\text{cal}}\}$. The advisor **answers** when $d(x) \le \tau$ and **abstains** when $d(x) > \tau$.
+1. **Semiparametric `FrontierEnsembleRegressor` (`surrogate="frontier_ensemble"`)**:
+   - **Closed-Form Analytic SVD Ridge Baselines**: Fits both a 30-feature core physicochemical linear free-energy model (`_AnalyticSVDRidge`, selecting optimal L2 regularization across 28 log-spaced penalties via exact Hat-matrix Leave-One-Out CV in a single SVD) and a full 2D+MACCS Ridge model, with variance floors preventing rare `[0, 1]` substructure bits from inflating extrapolations under Bemis-Murcko scaffold shift.
+   - **Universal-Kriging Dual-Space Kernel Ridge (`_DualSpaceKernelRidge`)**: Models nonlinear solvation/ADMET residuals $r = y - \hat{\mu}_{\text{lin}}(x)$ using a convex product/sum of multi-scale RBF + Rational Quadratic kernels on standardized 2D+MACCS descriptors and continuous Ruzicka/Tanimoto + RBF kernels on `log1p` radius-2 Morgan count fingerprints. Exact Leave-One-Out CV predictions are extracted in $O(1)$ extra work from the Cholesky factor $(K + \alpha I)^{-1}_{ii}$ (with Nystrom landmark Hat-matrix LOO for $N > 3,000$), paired with a direct non-parametric KRR anchor.
+   - **Residual & Direct Gradient-Boosted Trees**: Fits regularized `LightGBM` (with automatic `HistGradientBoostingRegressor` fallback when `lightgbm` is absent) on both linear-trend residuals and raw targets via 3-fold out-of-fold cross-validation, then optimizes non-negative simplex stacking weights $w \in \Delta^6$ strictly on `X_tr` out-of-fold predictions.
+2. **Centered Residual-Quantile `CQR-r` & Finite-Sample Mondrian Calibration**:
+   - `ResidualQuantileBandModel` fits quantile trees (`alpha/2` and `1 - alpha/2`) strictly on training out-of-fold residuals $y_{\text{tr}} - \hat{f}_{\text{OOF}}(X_{\text{tr}})$ and combines their span with cross-family epistemic disagreement $\hat{\sigma}_{\text{ens}}(x)$ to form centered bands $[\hat{f}(x) - s(x), \hat{f}(x) + s(x)]$ that never shift the stacked point prediction $\hat{f}(x)$.
+   - Computes exact rational order-statistic rank $\lceil(n_{\text{cal,in}} + 1)(1 - \alpha)\rceil$ matching `LabDecideLean.conformalRank`, returning $+\infty$ without clamping when $n < (1 - \alpha)/\alpha$.
+3. **Hybrid Tanimoto + Descriptor $k$-NN + Epistemic Disagreement Gate (`tanimoto_mahalanobis`)**:
+   - Combines leave-one-out-median-normalized 2D+MACCS descriptor $k$-NN distance, continuous Tanimoto $k$-NN distance on Morgan count fingerprints, and cross-family disagreement (`std` across linear, Universal-Kriging KRR, direct KRR, and tree components). On unfamiliar scaffolds where local-support KRR reverts toward the training mean while semiparametric learners extrapolate along physical descriptors, their divergence sharply flags epistemic OOD risk.
 
 ---
 
-## 4. Training
+## 4. Measured Benchmarks (`results/registry_benchmark.json`)
 
-### Fitting, Calibration & Active Boundary Expansion Loop
-1. **Round 0 (Initial Fit & Split Conformal Audit)**:
-   - Fits GBDT, `StandardScaler`, and 5-NN on `676` training compounds; calibrates $\hat{q} = 1.522$ and $\tau = 0.758$ on `226` calibration compounds; evaluates on `226` test compounds (`< 1s` CPU runtime).
-   - **Inside vs. Outside Stratification**:
-     - `inside` ($n = 180$, `79.6%` answered): empirical coverage **`0.922`**, MAE **`0.656`**, width `3.044`.
-     - `outside` ($n = 46$, `20.4%` abstained): empirical coverage **`0.870`**, MAE **`0.892`**, width `3.044`.
-2. **Rounds 1–3 (Boundary Acquisition Simulation)**:
-   - At each round $r \in \{1, 2, 3\}$, selects up to `PER_ROUND = 20` outside test points (`~inside`) with smallest $d(x)$, moves them into `train_idx` (`20`, `20`, then the remaining `10`), removes them from `test_idx`, and refits `(model, q, dist, thr)` against `X_cal`:
+### 20-Seed ESOL Head-to-Head vs. Delaney (2004) Linear Formula & 6-Descriptor GBDT
 
-| Round | `train` | `test` | `answered` | `cov_in` | `cov_out` | `cov_all` | `MAE_in` | `MAE_out` | `width` |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `0` | `676` | `226` | `0.796` | `0.922` | `0.870` | `0.912` | `0.656` | `0.892` | `3.044` |
-| `1` | `696` | `206` | `0.854` | `0.932` | `0.767` | `0.908` | `0.656` | `0.942` | `3.134` |
-| `2` | `716` | `186` | `0.946` | `0.938` | `0.800` | `0.930` | `0.640` | `0.847` | `3.102` |
-| `3` | `726` | `176` | `1.000` | `0.949` | `nan` | `0.949` | `0.642`* | `nan` | `3.210` |
+Evaluated across `20` paired seeds (`0..19`, 4-way split `561` train / `224` pool / `169` calibration / `169` test on `1,123` deduplicated ESOL compounds):
 
-*\*Note: Round 3 `MAE_in` prints `0.642` on Linux (`demo/output.txt`) and `0.641` on Windows/conda due to minor tree-split floating-point tie differences at the fourth decimal place.*
+| Split (`20` seeds) | Model / Representation | Features | `MAE_all` | `RMSE_all` | `R^2` | `MAE_in` | `MAE_out` | `cov_in` / `cov_all` | `width_in` / `width_all` |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `random` | Delaney (2004) 4-term formula (CSV column, in-sample fit) | `4` | `0.686 +- 0.029` | `0.894 +- 0.034` | `0.806 +- 0.024` | n/a | n/a | `0.910 +- 0.024` (all) | `3.016 +- 0.227` (all) |
+| `random` | Delaney (2004) 4-desc OLS (out-of-sample train split refit) | `4` | `0.777 +- 0.031` | `1.011 +- 0.047` | `0.752 +- 0.033` | n/a | n/a | `0.903 +- 0.032` (all) | `3.315 +- 0.344` (all) |
+| `random` | 6-descriptor Huber GBDT + Euclidean kNN (`descriptors`) | `6` | `0.661 +- 0.036` | `0.887 +- 0.054` | `0.809 +- 0.027` | `0.581 +- 0.040` | `1.002 +- 0.161` | `0.924 +- 0.028` | `2.754 +- 0.241` |
+| `random` | **Frontier Ensemble (`rdkit_2d_morgan` + `tanimoto_mahalanobis` + `cqr_r`)** | **`1416`** | **`0.422 +- 0.028`** | **`0.582 +- 0.047`** | **`0.918 +- 0.013`** | **`0.378 +- 0.024`** | **`0.610 +- 0.111`** | **`0.904 +- 0.030`** | **`1.633 +- 0.144`** |
+| `scaffold` | Delaney (2004) 4-term formula (CSV column, in-sample fit) | `4` | `0.832 +- 0.083` | `1.069 +- 0.102` | `0.736 +- 0.028` | n/a | n/a | `0.877 +- 0.069` (all) | `3.430 +- 0.546` (all) |
+| `scaffold` | Delaney (2004) 4-desc OLS (out-of-sample train split refit) | `4` | `1.083 +- 0.058` | `1.355 +- 0.074` | `0.571 +- 0.070` | n/a | n/a | `0.905 +- 0.045` (all) | `4.281 +- 0.263` (all) |
+| `scaffold` | 6-descriptor Huber GBDT + Euclidean kNN (`descriptors`) | `6` | `1.112 +- 0.086` | `1.485 +- 0.105` | `0.489 +- 0.056` | `1.029 +- 0.093` | `1.570 +- 0.385` | `0.873 +- 0.059` | `4.374 +- 0.588` |
+| `scaffold` | **Frontier Ensemble (`rdkit_2d_morgan` + `tanimoto_mahalanobis` + `cqr_r`)** | **`1416`** | **`0.808 +- 0.055`** | **`1.011 +- 0.071`** | **`0.763 +- 0.025`** | **`0.760 +- 0.044`** | **`1.015 +- 0.184`** | **`0.870 +- 0.075`** | **`3.293 +- 0.579`** |
 
-### Honest Methodological Caveat (Documented in `README.md`)
-As `README.md` explicitly cautions, the rise in `answered` fraction from `0.796` (`180 / 226`) to `1.000` (`176 / 176`) occurs because the `50` outside points were moved out of `test_idx` into `train_idx`, while the absolute count of answered test points stayed nearly constant (`180` $\rightarrow$ `176`). Establishing true trust-region expansion onto unseen chemistry requires separating the **unlabeled acquisition pool** from an untouched **held-out evaluation test set**.
+- **Why Scaffold Extrapolation Is Hard on ESOL (and How Universal Kriging Solves It)**: Under balanced Bemis-Murcko scaffold packing (`max_achieved_fraction_abs_error = 0.67` percentage points across 20 seeds), the single `acyclic` group (`46%` of ESOL) populates `~92%` of `train_idx` while `test_idx` consists entirely of cyclic/aromatic scaffolds. Pure tree models (`6-desc GBDT`, `MAE 1.112`) clip flat at leaf boundaries, whereas `FrontierEnsembleRegressor` extrapolates smoothly along regularized physicochemical solvation descriptors while refining ring/substructure residuals (`MAE 0.808`, beating even Delaney's in-sample fit `0.832` and reducing out-of-sample 4-descriptor OLS error `1.083` by **`25.3%`**).
+
+### 5-Seed Single-Molecule Representation Upgrade Across All 5 Molecular Datasets
+
+| `dataset_id` (`n_clean`) | `descriptors + gbdt` `MAE_all` (`MAE_in`) | `rdkit_2d_morgan + frontier_ensemble` `MAE_all` (`MAE_in` vs `MAE_out`) | `cov_in` | `width_in` Change | `MAE_in < MAE_out` |
+|---|---:|---:|---:|---:|---:|
+| `esol_delaney` (`1,123`) | `0.658` (`0.562`) | **`0.429`** (**`0.373`** vs `0.647`) | `0.906` | `2.74 -> 1.64` (`-40%`) | `5/5` (`20/20` on 20-seed) |
+| `aqsoldb` (`9,982`) | `0.846` (`0.738`) | **`0.675`** (**`0.581`** vs `1.044`) | `0.895` | `3.14 -> 2.39` (`-24%`) | `5/5` |
+| `freesolv` (`642`) | `1.071` (`0.845`) | **`0.571`** (**`0.413`** vs `1.126`) | `0.913` | `3.97 -> 1.73` (`-56%`) | `5/5` |
+| `lipophilicity_astrazeneca` (`4,200`) | `0.809` (`0.783`) | **`0.463`** (**`0.421`** vs `0.638`) | `0.905` | `3.15 -> 1.85` (`-41%`) | `5/5` |
+| `biogen_adme` (`3,087`) | `0.438` (`0.422`) | **`0.350`** (**`0.340`** vs `0.388`) | `0.918` | `1.68 -> 1.42` (`-15%`) | `5/5` |
 
 ---
 
 ## 5. History
 
-| Commit | Date | Author | Branch / Ref | Summary |
-|---|---|---|---|---|
-| `41dae77` (`41dae77ebcbabf62103cbb65fefe75eb129558bc`) | `2026-11-18` | Yani Guan | `main` | Initial commit (`Add curated resources and first demo`): added `demo/conformal_trust.py` (ESOL GBDT surrogate + 90% split conformal prediction + 5-NN 80th-percentile trust-region abstention + 3-round boundary acquisition demo), `demo/output.txt`, `.github/workflows/demo.yml` (Python 3.12 CI), and curated BO / conformal datasets, libraries, and papers (`2012`–`2026`) in `README.md`. |
-| `6957f12` | `2026-11-25` | Yani Guan | `main` (PR `#30`) | Phase 2 audit hardening & `autolab-wire/v1` L6 gate: exact rational `conformal_rank` parity with `LabDecideLean`, likelihood-ratio weighted expansion (`weighted_conformal_quantile`), locally scaled `CQR-r` crossing guards, zero-variance OOD protection, and SHA-256 certified ledger recalibration. |
-| `feat/open-datasets-2026` | `2026-11-25` | Yani Guan | `feat/open-datasets-2026` | Integrated `OpenCalibrationDataset` registry (`src/lab_decide/datasets.py`), `scripts/fetch_open_datasets.py`, and `tests/test_open_datasets_2026.py` covering `10` new open-source molecular solubility, electrolyte solvation, ADMET, and HTE reaction optimization benchmarks (`AqSolDB`, `BigSolDB 2.2`, `CALiSol-23`, `FreeSolv`, `Lipophilicity_AstraZeneca`, `Biogen ADME`, `Doyle Buchwald-Hartwig`, `Perera Suzuki-Miyaura`, `Shields Direct Arylation`, and `BH-HTE-OOD 2026`). |
+| Commit / PR | Date | Author | Summary |
+|---|---|---|---|
+| `41dae77` | `2026-11-18` | Yani Guan | Initial commit: `demo/conformal_trust.py`, `demo/output.txt`, `.github/workflows/demo.yml`, and curated BO & conformal catalog in `README.md`. |
+| `6957f12` (PR `#30`) | `2026-11-25` | Yani Guan | Phase 2 audit hardening & `autolab-wire/v1` L6 gate: exact rational `conformal_rank` parity with `LabDecideLean`, likelihood-ratio weighted expansion (`weighted_conformal_quantile`), `CQR-r` crossing guards, zero-variance OOD protection, and SHA-256 certified ledger recalibration. |
+| `e37de97` (PR `#31`) | `2026-11-25` | Yani Guan | Integrated 11-dataset `OpenCalibrationDataset` registry (`src/lab_decide/datasets.py`), `scripts/fetch_open_datasets.py`, and `tests/test_open_datasets_2026.py`. |
+| `f72af29` (PR `#36`) | `2026-11-27` | Yani Guan | Resolved Issues `#32-#35`: deterministic balanced group-packing splits (`scaffold` & `group`), HTE `onehot_morgan` + `ensemble_mahalanobis` gating across all 11 real datasets, 10-seed sequential BO campaigns (`results/campaign_benchmark.json`), Lean 4.36.0 CI axiom audit (`23` theorems), and SHA-pinned ESOL wire scoring. |
+| `feat/frontier-rdkit2d-morgan-vs-delaney` | `2026-11-28` | Yani Guan | Frontier molecular representation (`rdkit_2d_morgan`) & semiparametric `FrontierEnsembleRegressor` + `ResidualQuantileBandModel` `cqr_r` + `tanimoto_mahalanobis` gating, 20-seed random & scaffold head-to-head vs Delaney (2004) (`38.5%` lower random MAE `0.422`, `MAE_in 0.378`), 5-dataset molecular registry upgrade (`11/11` `gate_informative = True`), and upgraded `autolab_wire.py` frontier ESOL surrogate. |
 
 ---
 
-## 6. Unique Properties
+## 6. Unique Properties & Formal Lean 4 Guarantees
 
-### Statistical & Architectural Invariants
-1. **Distribution-Free Finite-Sample Marginal Coverage**: Uses the exact order-statistic correction $\lceil(n_{\text{cal}}+1)(1-\alpha)\rceil / n_{\text{cal}}$ with `method="higher"` on held-out calibration residuals rather than Gaussian homoscedastic or uncalibrated ensemble-variance heuristics.
-2. **Explicit Epistemic Abstention Gate**: Separates *interval calibration* ($\hat{q}$) from *applicability-domain membership* ($d_{\text{5-NN}}(x) \le \tau$), empirically isolating lower-error predictions inside the trust region (`MAE 0.656`, `92.2%` coverage) from higher-error OOD points (`MAE 0.892`, `87.0%` coverage).
-3. **Zero Target Leakage from Pre-Fitted Descriptors**: Drops Delaney's fitted `ESOL predicted` column so surrogate performance reflects pure physical/topological descriptor learning.
-4. **Scientific Transparency on Evaluation Artifacts**: Explicitly warns readers in `README.md` not to misinterpret pool-shrinking `answered = 1.000` as genuine generalization to novel test compounds.
-
-### Hardened Statistical & Architectural Invariants (Audits `#1..#22` & `#24..#29` Resolved)
-- **Mondrian Selective Coverage, Exact Rational Rank & Hierarchical Fallback**: Calibrates $\hat{q}_{\text{in}}$ on $\{i \in \text{cal} : d(x_i) \le \hat{\tau}\}$ using exact rational ceiling $\lceil(n+1)(1-\alpha)\rceil$ aligned 1-to-1 with `LabDecideLean.conformalRank`, freezing `ScaffoldMondrianACI` $\alpha_t$ across abstained cold-start steps and providing hierarchical global-pool fallback when low-$n$ `trust_pct` splits starve `in_mask`.
-- **Disjoint 4-Way Split (`train / pool / cal / test`) & Likelihood-Ratio Reweighted Expansion**: Acquires boundary candidates exclusively from `pool_idx` via sequential maximin $k$-NN diversity and reweights outer-shell calibration additions via Tibshirani-Foygel-Barber Radon-Nikodym likelihood ratios (`weighted_conformal_quantile` with exact rational tied-score aggregation), holding `test_idx` strictly frozen (`n_test = 169`, `answered` rising `141 -> 144`, `cov_in = 0.931`, `cov_all = 0.917`).
-- **Locally Scaled `CQR-r`, Zero-Variance OOD Invariant Guards & Physical Bounds**: Supports locally scaled Conformalized Quantile Regression (`cqr_r`) with monotonic midpoint crossing guards (`lo <= hi`), asymmetric directional `TrustRegionAdvisor` acquisition (`conformal_ucb` / dynamic-$\alpha$ `conformal_ei`), zero-variance training invariant protection + `CALiSol-23` `salt_other` / `solv_other_mass` OOV gating, and certified-support `Chem-RRT` chaining in `LabDecideLean`.
-- **Picklable `ConformalTrustModel`, `DecisionEnvelope` Schema & `CALiSol-23` Adapter**: Exposes serializable 1D/2D `ConformalTrustModel`, `DecisionEnvelope` JSONL contract with `lab-ask-why`, and publication-DOI `CALiSol-23` benchmarking with Winkler interval-efficiency scoring.
-
-### Sibling-Repository Integration Contracts
-- **[`lab-ask-why`](https://github.com/yaniguan/lab-ask-why) (`L6`)**: Supplies competing hypothesis rationales and discriminating test candidates that `lab-decide` filters for applicability-domain support and expected information gain.
-- **[`lab-attrib`](https://github.com/yaniguan/lab-attrib) (`L4`)**: Performs post-execution causal blame attribution, NNLS precursor ghost-peak deconvolution, and SHA-256 `CertifiedLedger` signing so only verified wet-lab outcomes recalibrate `lab-decide`'s conformal support.
-- **[`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain) (`L3`)**: Aligns directly with `CALiSolDesign` / `InverseDesignSupportTemplate` (kernel support gating), `CALiSolPredict` / `ScalarObservableTemplate` (calibrated $\sigma$ rewards), and calibrated `L6_ABSTAIN` anti-hack RLVR scoring.
-- **[`buy-or-make`](https://github.com/yaniguan/buy-or-make) & [`labshift`](https://github.com/yaniguan/labshift) (`L5`)**: Receive trusted/abstained experiment packets and acquisition priorities for reagent procurement triage and multi-instrument scheduling.
-- **[`lab-rehearsal`](https://github.com/yaniguan/lab-rehearsal) & [`lab-verify`](https://github.com/yaniguan/lab-verify) (`L4`)**: Enforce deterministic physical, volumetric, and formal safety gates on every experiment promoted by `lab-decide` before hardware execution (`stepbot`, `lab-hands`, `lab-feet`).
+1. **Lean 4.36.0 Verified Guardrails (`lean/LabDecideLean.lean`, `23` Theorems, Zero `sorryAx`)**:
+   - Proves exact integer ceiling bounds (`conformalRank_exact_lower`, `conformalRank_exact_upper`), small-sample non-clamping abstention (`undersized_calib_always_abstains`), out-of-domain abstention (`out_of_domain_always_abstains`), physical interval ordering (`physical_bounds_respected`), annular stepping-stone bounds (`frontier_calibration_strictly_annular`, `deep_ood_always_blocked`), and multi-hop certified-support chaining (`unassayed_hop_blocks_chain`, `certified_chain_annular_span`).
+2. **Decoupled Interval Calibration & Abstention**:
+   - Any measurable applicability-domain partition defined strictly from `X_tr` (`tanimoto_mahalanobis`, `ensemble_mahalanobis`, `mahalanobis`, or canonical 6D ESOL `euclidean` kNN) paired with `FrontierEnsembleRegressor` preserves exact finite-sample distribution-free Mondrian coverage on exchangeable calibration/test splits.
+3. **Zero Target Leakage & Honest Provenance**:
+   - Excludes pre-fitted prediction and sibling assay columns across all 11 loaders, stamps `data_source` (`real_csv` vs `synthetic_fixture`) on every output, and evaluates Delaney (2004) both in-sample (CSV column) and out-of-sample (refitted 4-descriptor OLS).
 
 ---
 
-## 7. 15-Repository Auto-Lab Wire Contract (autolab-wire/v1)
+## 7. 15-Repository Auto-Lab Wire Contract (`autolab-wire/v1`)
 
-`autolab_wire.py` (`REPO_ID = "lab-decide"`, `LAYER = "L6"`) implements the standardized `autolab-wire/v1` packet node `process_packet(packet: dict) -> dict` across the 15-repository Auto-Lab stack:
+`autolab_wire.py` (`REPO_ID = "lab-decide"`, `LAYER = "L6"`) implements `process_packet(packet: dict) -> dict` across the 15-repository Auto-Lab stack:
 
-1. **Path & State Hygiene**: Resolves repository imports strictly via `REPO_DIR = Path(__file__).resolve().parent` without relying on working-directory state, deep-copies incoming packets, and passes already-halted packets (`halted == True`) through unchanged.
-2. **Frozen SHA-Pinned ESOL `ConformalTrustModel`**: Fits and caches `ConformalTrustModel` (`seed = 0`, 4-way split `561/224/169/169`, `threshold = 0.6750`, `q_in = 1.2962`, `n_calib = 169`) from the SHA-256-verified ESOL CSV (`ESOL_SHA256`). Fails closed (`halted = True`, `halt_reason = "L6_ABSTAIN"`) if the verified ESOL CSV is missing or corrupt.
-3. **Exact RDKit Descriptor Scoring & Distance Provenance**: Computes 6D ESOL descriptors from `candidate_smiles` via `smiles_to_descriptors` (never falling back to string-length heuristics) and evaluates predictions, intervals, and trust-region membership directly via `ConformalTrustModel.predict` (failing closed when RDKit is unavailable or `candidate_smiles` is invalid). Packet `knn_distance` is honored only when `distance_source == "upstream"`, recording `distance_source` in `packet["decision"]`.
-4. **Downstream Handoff (`lab-decide` -> `buy-or-make`)**: Emits `packet["decision"]` (`candidate_smiles`, `in_trust_region`, `abstain`, `distance_source`, `knn_distance`, `effective_threshold`, `effective_n_calib`, `predicted_log_s`, and physical-bound-clipped `conformal_interval`) directly to [`buy-or-make`](https://github.com/yaniguan/buy-or-make) (`L5`).
-5. **Residual-Gated Closed-Loop Recalibration (`lab-attrib` & `labbench-posttrain` -> `lab-decide`)**: Validates canonical 64-hex SHA-256 `ledger_entry_sha256` digests (or explicit `admit_to_memory=True` entries with unique run IDs) and deduplicates replayed entries from [`lab-attrib`](https://github.com/yaniguan/lab-attrib), recomputing conformal quantiles and `conformal_threshold` strictly from genuine `(descriptors, measured_y)` / residual observations without ever widening `effective_threshold` by counting entries or when an entry's residual exceeds `q_in`.
+1. **Path, Line-Ending & State Hygiene**: Resolves imports via `REPO_DIR = Path(__file__).resolve().parent`, verifies `ESOL_SHA256` (normalizing CRLF -> LF when checked out on Windows), deep-copies incoming packets, and passes already-halted packets through unchanged.
+2. **Frozen SHA-Pinned ESOL Frontier `ConformalTrustModel`**: Fits and caches `ConformalTrustModel` (`seed = 0`, 4-way split `561/224/169/169`, `model_encoding = "rdkit_2d_morgan"`, `surrogate = "frontier_ensemble"`, canonical 6D ESOL kNN `threshold = 0.675015`, `effective_n_calib = 169`). Fails closed (`halted = True`, `halt_reason = "L6_ABSTAIN"`) if RDKit is absent, `candidate_smiles` is invalid, or the verified ESOL CSV is unavailable.
+3. **High-Accuracy Point & Interval Scoring with Preserved Hub Domain Boundaries**: Cuts ESOL `seed=0` held-out test MAE from `0.735` (`MAE_in 0.640`, `width_in 3.066`) to `~0.45` (`MAE_in ~0.39`, `width_in ~1.95`) while strictly preserving `abstain = True` on C60 fullerene, cyclosporin A (`knn_distance > 10.0`), and sucrose, `abstain = False` on aspirin and ethanol, `distance_source == "upstream"` override semantics, and Round-2 certified low-residual benzotriazole boundary expansion (`0.675015 -> 0.682118`, unlocking diethyl malonate at `effective_n_calib = 170`).

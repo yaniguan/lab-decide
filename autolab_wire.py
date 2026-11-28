@@ -2,11 +2,13 @@
 
 Implements `autolab-wire/v1` packet processing backed by a frozen `ConformalTrustModel` fitted on
 SHA-256-pinned ESOL (`seed=0`, 4-way split `561/224/169/169`):
-- Exact RDKit 6D descriptor extraction via `smiles_to_descriptors` (failing closed when RDKit or
-  the SHA-verified ESOL CSV is unavailable, or when `candidate_smiles` cannot be parsed),
+- Rich `rdkit_2d_morgan` molecular featurization + semiparametric `FrontierEnsembleRegressor` point
+  surrogate paired with Mondrian split-conformal calibration over the canonical 6D ESOL kNN
+  applicability domain (`effective_n_calib = 169`, failing closed when RDKit or the SHA-verified
+  ESOL CSV is unavailable, or when `candidate_smiles` cannot be parsed),
 - Exact parity with `ConformalTrustModel.predict` on in-domain/out-of-domain gating and intervals,
 - Packet `knn_distance` honored ONLY when `distance_source == "upstream"`,
-- Genuine `(descriptors, measured_y)` / residual calibration updates from SHA-256 deduplicated
+- Genuine `(smiles/descriptors, measured_y)` / residual calibration updates from SHA-256 deduplicated
   `certified_ledger_entries` (never widening `effective_threshold` by counting entries or from
   high-residual measurements).
 """
@@ -56,9 +58,15 @@ def _load_mondrian_drift_conformal() -> Any:
 
 conformal_order_rank = _load_mondrian_drift_conformal().conformal_order_rank
 import lab_decide.chemistry as _chem_mod  # noqa: E402
-from lab_decide.chemistry import ESOL_FEATURES, HAS_RDKIT, smiles_to_descriptors  # noqa: E402
+from lab_decide.chemistry import (  # noqa: E402
+    ESOL_FEATURES,
+    HAS_RDKIT,
+    smiles_to_descriptors,
+    smiles_to_rdkit_2d_morgan,
+)
 from lab_decide.conformal import (  # noqa: E402
     ConformalTrustModel,
+    _fit_point_surrogate,
     conformal_quantile,
     conformal_threshold,
     fit_and_calibrate,
@@ -72,6 +80,7 @@ from lab_decide.data import (  # noqa: E402
 )
 
 DEFAULT_CANDIDATE_SMILES = "CC(=O)Oc1ccccc1C(=O)O"
+DEFAULT_WIRE_ENCODING = "rdkit_2d_morgan"
 PHYS_MIN_LOGS = -15.0
 PHYS_MAX_LOGS = 1.75
 _SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -85,12 +94,30 @@ _DEFAULT_ESOL_CANDIDATE_PATHS: tuple[Path, ...] = (
 @dataclass(frozen=True)
 class _FrozenEsolState:
     advisor: ConformalTrustModel
+    fallback_6d_model: Any
+    model_encoding: str
+    surrogate_name: str
     csv_path: str
     X_cal: np.ndarray
     y_cal: np.ndarray
     d_cal: np.ndarray
     pred_cal: np.ndarray
     scores_cal: np.ndarray
+
+
+def _sha256_lf_normalized_matches(path: Path, expected_hex: str) -> tuple[bool, str]:
+    """Verify SHA-256 digest, normalizing CRLF -> LF if Windows git autocrlf altered line endings."""
+    digest = compute_file_sha256(str(path))
+    if digest.lower() == expected_hex.lower():
+        return True, digest
+    raw = path.read_bytes()
+    if b"\r\n" in raw:
+        import hashlib
+
+        lf_digest = hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
+        if lf_digest.lower() == expected_hex.lower():
+            return True, lf_digest
+    return False, digest
 
 
 def _resolve_verified_esol_csv(explicit_path: str | None = None) -> str:
@@ -104,8 +131,8 @@ def _resolve_verified_esol_csv(explicit_path: str | None = None) -> str:
             raise FileNotFoundError(
                 f"ESOL calibration CSV is not cached at {p}; cannot certify L6 conformal gate offline."
             )
-        digest = compute_file_sha256(str(p))
-        if digest.lower() != ESOL_SHA256.lower():
+        ok, digest = _sha256_lf_normalized_matches(p, ESOL_SHA256)
+        if not ok:
             raise RuntimeError(
                 f"ESOL calibration CSV at {p} failed SHA-256 verification (expected {ESOL_SHA256}, got {digest})."
             )
@@ -113,8 +140,8 @@ def _resolve_verified_esol_csv(explicit_path: str | None = None) -> str:
 
     for cand in _DEFAULT_ESOL_CANDIDATE_PATHS:
         if cand.is_file():
-            digest = compute_file_sha256(str(cand))
-            if digest.lower() == ESOL_SHA256.lower():
+            ok, _ = _sha256_lf_normalized_matches(cand, ESOL_SHA256)
+            if ok:
                 return str(cand.resolve())
 
     searched = ", ".join(str(p) for p in _DEFAULT_ESOL_CANDIDATE_PATHS)
@@ -124,45 +151,88 @@ def _resolve_verified_esol_csv(explicit_path: str | None = None) -> str:
 
 
 @lru_cache(maxsize=8)
-def _load_frozen_esol_state(resolved_csv_path: str) -> _FrozenEsolState:
+def _load_frozen_esol_state(
+    resolved_csv_path: str,
+    model_encoding: str = DEFAULT_WIRE_ENCODING,
+) -> _FrozenEsolState:
     """Fit and cache the canonical seed-0 ESOL `ConformalTrustModel` on SHA-pinned CSV."""
-    digest = compute_file_sha256(resolved_csv_path)
-    if digest.lower() != ESOL_SHA256.lower():
+    if model_encoding not in ("rdkit_2d_morgan", "descriptors"):
+        raise ValueError(
+            f"Unsupported model_encoding {model_encoding!r}; expected 'rdkit_2d_morgan' or 'descriptors'"
+        )
+    ok, digest = _sha256_lf_normalized_matches(Path(resolved_csv_path), ESOL_SHA256)
+    if not ok:
         raise RuntimeError(
             f"ESOL CSV {resolved_csv_path} failed SHA-256 check (expected {ESOL_SHA256}, got {digest})."
         )
-    bundle = load_dataset(csv_path=resolved_csv_path, offline=True)
+    bundle_6d = load_dataset(csv_path=resolved_csv_path, offline=True, encoding="descriptors")
     splits = partition_splits(
-        len(bundle.y),
+        len(bundle_6d.y),
         strategy="random",
         seed=0,
         fracs=(0.50, 0.20, 0.15, 0.15),
     )
-    X_tr = bundle.X[splits.train_idx]
-    y_tr = bundle.y[splits.train_idx]
-    X_cal = bundle.X[splits.cal_idx]
-    y_cal = bundle.y[splits.cal_idx]
+    X_tr_6d = bundle_6d.X[splits.train_idx]
+    y_tr = bundle_6d.y[splits.train_idx]
+    y_cal = bundle_6d.y[splits.cal_idx]
 
-    advisor = fit_and_calibrate(
-        X_tr,
-        y_tr,
-        X_cal,
-        y_cal,
-        alpha=0.10,
-        k=5,
-        trust_pct=80.0,
-        seed=0,
-        loss="huber",
-        nonconformity="normalized",
-        distance_weighting="importance",
-        domain_bounds=(PHYS_MIN_LOGS, PHYS_MAX_LOGS),
-        feature_names=bundle.feature_names,
+    ref_6d_gbdt = _fit_point_surrogate(
+        X_tr_6d, y_tr, surrogate="gbdt", loss="huber", seed=0
     )
+
+    if model_encoding == "rdkit_2d_morgan":
+        bundle_mol = load_dataset(
+            csv_path=resolved_csv_path, offline=True, encoding="rdkit_2d_morgan"
+        )
+        X_tr = bundle_mol.X[splits.train_idx]
+        X_cal = bundle_mol.X[splits.cal_idx]
+        surrogate_name = "frontier_ensemble"
+        advisor = fit_and_calibrate(
+            X_tr,
+            y_tr,
+            X_cal,
+            y_cal,
+            alpha=0.10,
+            k=5,
+            trust_pct=80.0,
+            seed=0,
+            loss="huber",
+            nonconformity="normalized",
+            distance_weighting="importance",
+            distance_metric="euclidean",
+            surrogate=surrogate_name,
+            domain_bounds=(PHYS_MIN_LOGS, PHYS_MAX_LOGS),
+            feature_names=bundle_mol.feature_names,
+            gate_n_features=len(ESOL_FEATURES),
+            gate_reference_model=ref_6d_gbdt,
+        )
+    else:
+        X_cal = bundle_6d.X[splits.cal_idx]
+        surrogate_name = "gbdt"
+        advisor = fit_and_calibrate(
+            X_tr_6d,
+            y_tr,
+            X_cal,
+            y_cal,
+            alpha=0.10,
+            k=5,
+            trust_pct=80.0,
+            seed=0,
+            loss="huber",
+            nonconformity="normalized",
+            distance_weighting="importance",
+            domain_bounds=(PHYS_MIN_LOGS, PHYS_MAX_LOGS),
+            feature_names=bundle_6d.feature_names,
+        )
+
     d_cal = advisor.distance(X_cal)
     pred_cal = np.asarray(advisor.model.predict(X_cal), dtype=np.float64)
     scores_cal = np.abs(y_cal - pred_cal) / (1.0 + advisor.gamma * d_cal)
     return _FrozenEsolState(
         advisor=advisor,
+        fallback_6d_model=ref_6d_gbdt,
+        model_encoding=model_encoding,
+        surrogate_name=surrogate_name,
         csv_path=resolved_csv_path,
         X_cal=X_cal,
         y_cal=y_cal,
@@ -172,10 +242,14 @@ def _load_frozen_esol_state(resolved_csv_path: str) -> _FrozenEsolState:
     )
 
 
-def get_cached_esol_model(esol_csv_path: str | None = None) -> ConformalTrustModel:
+def get_cached_esol_model(
+    esol_csv_path: str | None = None,
+    *,
+    model_encoding: str = DEFAULT_WIRE_ENCODING,
+) -> ConformalTrustModel:
     """Public accessor returning the cached seed-0 SHA-pinned ESOL `ConformalTrustModel`."""
     resolved = _resolve_verified_esol_csv(esol_csv_path)
-    return _load_frozen_esol_state(resolved).advisor
+    return _load_frozen_esol_state(resolved, model_encoding=model_encoding).advisor
 
 
 def _rdkit_available() -> bool:
@@ -256,41 +330,53 @@ def _deduplicate_certified_entries(
     return deduped, dup_count, invalid_count
 
 
-def _featurize_entry_descriptors(entry: Mapping[str, Any]) -> np.ndarray | None:
-    """Extract 6D ESOL descriptor vector for a ledger entry strictly via explicit dict or RDKit."""
-    desc_map = entry.get("candidate_descriptors")
-    if isinstance(desc_map, Mapping) and all(f in desc_map for f in ESOL_FEATURES):
-        try:
-            vec = np.asarray([float(desc_map[f]) for f in ESOL_FEATURES], dtype=np.float64)
-            if np.all(np.isfinite(vec)):
-                return vec
-        except (TypeError, ValueError):
-            return None
-
+def _featurize_entry_vectors(
+    entry: Mapping[str, Any],
+    model_encoding: str,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Return `(full_model_vec, gate_6d_vec)` for a ledger entry strictly via RDKit or explicit dict."""
     smi = entry.get("candidate_smiles")
     if isinstance(smi, str) and smi.strip() and _rdkit_available():
         try:
+            if model_encoding == "rdkit_2d_morgan":
+                mol_vec = smiles_to_rdkit_2d_morgan(smi, strict=True)
+                return mol_vec, mol_vec[: len(ESOL_FEATURES)]
             d = smiles_to_descriptors(smi)
-            return np.asarray([float(d[f]) for f in ESOL_FEATURES], dtype=np.float64)
+            vec6 = np.asarray([float(d[f]) for f in ESOL_FEATURES], dtype=np.float64)
+            return vec6, vec6
         except (ValueError, ImportError):
-            return None
-    return None
+            pass
+
+    desc_map = entry.get("candidate_descriptors")
+    if isinstance(desc_map, Mapping) and all(f in desc_map for f in ESOL_FEATURES):
+        try:
+            vec6 = np.asarray([float(desc_map[f]) for f in ESOL_FEATURES], dtype=np.float64)
+            if np.all(np.isfinite(vec6)):
+                return (vec6 if model_encoding == "descriptors" else None), vec6
+        except (TypeError, ValueError):
+            return None, None
+
+    return None, None
 
 
 def _extract_entry_calibration_observation(
     entry: Mapping[str, Any],
-    advisor: ConformalTrustModel,
+    state: _FrozenEsolState,
 ) -> tuple[float, float, float, bool] | None:
     """Return `(d_entry, norm_score, lr_weight, has_descriptors)` for a measured ledger entry.
 
     Returns `None` when the entry carries neither a measured target (`measured_y` / `measured_log_s`
     / `observed_y`) nor an explicit `calibration_residual`.
     """
-    x_vec = _featurize_entry_descriptors(entry)
-    has_desc = x_vec is not None
-    if x_vec is not None:
-        d_entry = float(advisor.distance(x_vec)[0])
-        pred_entry = float(advisor.model.predict(x_vec.reshape(1, -1))[0])
+    advisor = state.advisor
+    x_full, x_gate6 = _featurize_entry_vectors(entry, state.model_encoding)
+    has_desc = x_gate6 is not None
+    if x_full is not None:
+        d_entry = float(advisor.distance(x_full)[0])
+        pred_entry = float(advisor.model.predict(x_full.reshape(1, -1))[0])
+    elif x_gate6 is not None:
+        d_entry = float(advisor.distance(x_gate6)[0])
+        pred_entry = float(state.fallback_6d_model.predict(x_gate6.reshape(1, -1))[0])
     elif (
         entry.get("distance_source") == "upstream"
         and "knn_distance" in entry
@@ -332,6 +418,7 @@ def _emit_fail_closed_abstain(
     distance_source: str,
     reason_code: str,
     detail: str,
+    model_encoding: str = DEFAULT_WIRE_ENCODING,
     knn_distance: float | None = None,
     effective_threshold: float | None = None,
     effective_n_calib: int = 0,
@@ -345,6 +432,8 @@ def _emit_fail_closed_abstain(
         "in_trust_region": False,
         "abstain": True,
         "abstain_reason": reason_code,
+        "model_encoding": model_encoding,
+        "surrogate": "frontier_ensemble" if model_encoding == "rdkit_2d_morgan" else "gbdt",
         "distance_source": distance_source,
         "knn_distance": round(float(knn_distance), 6) if (knn_distance is not None and math.isfinite(knn_distance)) else None,
         "effective_threshold": round(float(effective_threshold), 6) if (effective_threshold is not None and math.isfinite(effective_threshold)) else None,
@@ -407,6 +496,20 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
     )
     distance_source = "upstream" if use_upstream_dist else "fitted_esol_model"
 
+    req_encoding = out.get("model_encoding", DEFAULT_WIRE_ENCODING)
+    model_encoding = str(req_encoding) if isinstance(req_encoding, str) else DEFAULT_WIRE_ENCODING
+    if model_encoding not in ("rdkit_2d_morgan", "descriptors"):
+        return _emit_fail_closed_abstain(
+            out,
+            candidate_smiles=candidate_smiles,
+            distance_source=distance_source,
+            reason_code="invalid_model_encoding",
+            detail=f"Unsupported model_encoding={req_encoding!r}",
+            model_encoding=DEFAULT_WIRE_ENCODING,
+            duplicate_ignored=duplicate_ignored,
+            invalid_ignored=invalid_ignored,
+        )
+
     # 1. Fail closed if RDKit is missing or candidate_smiles does not parse as a valid molecule
     if not _rdkit_available():
         return _emit_fail_closed_abstain(
@@ -414,7 +517,8 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
             candidate_smiles=candidate_smiles,
             distance_source=distance_source,
             reason_code="rdkit_unavailable",
-            detail="RDKit is required to compute ESOL 6D descriptors for L6 conformal gating",
+            detail="RDKit is required to compute molecular descriptors for L6 conformal gating",
+            model_encoding=model_encoding,
             duplicate_ignored=duplicate_ignored,
             invalid_ignored=invalid_ignored,
         )
@@ -422,8 +526,11 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
     try:
         if not isinstance(raw_smiles, str) or not raw_smiles.strip():
             raise ValueError("candidate_smiles must be a non-empty SMILES string")
-        cand_desc = smiles_to_descriptors(candidate_smiles)
-        x_cand = np.asarray([float(cand_desc[f]) for f in ESOL_FEATURES], dtype=np.float64)
+        if model_encoding == "rdkit_2d_morgan":
+            x_cand = smiles_to_rdkit_2d_morgan(candidate_smiles, strict=True)
+        else:
+            cand_desc = smiles_to_descriptors(candidate_smiles)
+            x_cand = np.asarray([float(cand_desc[f]) for f in ESOL_FEATURES], dtype=np.float64)
     except (ValueError, ImportError) as exc:
         return _emit_fail_closed_abstain(
             out,
@@ -431,6 +538,7 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
             distance_source=distance_source,
             reason_code="invalid_candidate_smiles",
             detail=str(exc),
+            model_encoding=model_encoding,
             duplicate_ignored=duplicate_ignored,
             invalid_ignored=invalid_ignored,
         )
@@ -441,7 +549,7 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
         resolved_csv = _resolve_verified_esol_csv(
             str(explicit_csv) if explicit_csv is not None else None
         )
-        state = _load_frozen_esol_state(resolved_csv)
+        state = _load_frozen_esol_state(resolved_csv, model_encoding=model_encoding)
     except (FileNotFoundError, RuntimeError, ValueError, OSError) as exc:
         return _emit_fail_closed_abstain(
             out,
@@ -449,6 +557,7 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
             distance_source=distance_source,
             reason_code="esol_cache_unavailable",
             detail=str(exc),
+            model_encoding=model_encoding,
             duplicate_ignored=duplicate_ignored,
             invalid_ignored=invalid_ignored,
         )
@@ -465,6 +574,7 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
             distance_source=distance_source,
             reason_code="invalid_alpha_or_weight",
             detail=str(exc),
+            model_encoding=model_encoding,
             effective_threshold=advisor.threshold,
             effective_n_calib=int(state.scores_cal.size),
             duplicate_ignored=duplicate_ignored,
@@ -484,6 +594,7 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
                 distance_source=distance_source,
                 reason_code="invalid_upstream_distance",
                 detail=str(exc),
+                model_encoding=model_encoding,
                 effective_threshold=advisor.threshold,
                 effective_n_calib=int(state.scores_cal.size),
                 duplicate_ignored=duplicate_ignored,
@@ -496,7 +607,7 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
     measured_obs: list[tuple[float, float, float, bool]] = []
     unmeasured_ignored = 0
     for entry in valid_certified:
-        obs = _extract_entry_calibration_observation(entry, advisor)
+        obs = _extract_entry_calibration_observation(entry, state)
         if obs is None:
             unmeasured_ignored += 1
         else:
@@ -637,6 +748,8 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
         "candidate_smiles": candidate_smiles,
         "in_trust_region": not abstain,
         "abstain": abstain,
+        "model_encoding": state.model_encoding,
+        "surrogate": state.surrogate_name,
         "distance_source": distance_source,
         "knn_distance": knn_distance,
         "effective_threshold": effective_threshold if math.isfinite(effective_threshold) else None,
@@ -659,6 +772,7 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
         )
         summary = (
             f"Conformal decision gate abstained ({detail}; "
+            f"encoding={state.model_encoding}, "
             f"distance_source={distance_source}, "
             f"certified_recalibration_count={len(measured_obs)}, "
             f"duplicates_ignored={duplicate_ignored})."
@@ -666,7 +780,8 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
     else:
         summary = (
             f"Conformal decision gate passed (knn_distance={knn_distance:.4f} <= "
-            f"effective_threshold={effective_threshold:.4f}, distance_source={distance_source}, "
+            f"effective_threshold={effective_threshold:.4f}, encoding={state.model_encoding}, "
+            f"distance_source={distance_source}, "
             f"rank={rank_k}/{effective_n_calib}, "
             f"interval=[{low:.4f}, {high:.4f}], "
             f"certified_recalibration_count={len(measured_obs)}, "
@@ -688,11 +803,12 @@ def process_packet(packet: dict[str, Any]) -> dict[str, Any]:
             "invariant": "out_of_domain_always_abstains",
             "first_principles": (
                 "Distribution-free Mondrian normalized split-conformal coverage at level (1 - alpha) "
-                "scores candidate SMILES with the SHA-256-pinned ESOL ConformalTrustModel, enforcing "
-                "exact rational finite-sample rank ceil((n + 1) * (1 - alpha)) <= n without clamping "
-                "and kNN applicability-domain membership d_kNN(x) <= tau; certified ledger observations "
-                "(descriptors, measured_y) recompute nonconformity quantiles and never widen tau on "
-                "unmeasured or high-residual entries."
+                "scores candidate SMILES with the SHA-256-pinned ESOL ConformalTrustModel "
+                "(rdkit_2d_morgan + frontier_ensemble surrogate over the canonical 6D ESOL kNN domain), "
+                "enforcing exact rational finite-sample rank ceil((n + 1) * (1 - alpha)) <= n without "
+                "clamping and kNN applicability-domain membership d_kNN(x) <= tau; certified ledger "
+                "observations recompute nonconformity quantiles and never widen tau on unmeasured or "
+                "high-residual entries."
             ),
         }
     )
