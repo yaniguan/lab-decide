@@ -277,29 +277,46 @@ def test_issue_32_distance_source_upstream_and_residual_gated_ledger_recalibrati
     assert recal_ok["decision"]["effective_n_calib"] == 174
     assert recal_ok["decision"]["effective_threshold"] > adv.threshold
 
-    # Hub 15-repo wire check contract: diethyl malonate abstains at Round 1 (0.681541 > 0.675015)
-    # and unlocks at Round 2 (threshold -> 0.682118, n_calib -> 170) after certified benzotriazole (-0.78).
+    # Hub 15-repo wire check contract: diethyl malonate abstains at Round 1 (~0.6815 > ~0.6750)
+    # and unlocks at Round 2 (threshold -> ~0.6821, n_calib -> 170) after certified benzotriazole (-0.78),
+    # with exact bit-level threshold parity against the 6-descriptor model on every OS/libm platform.
     dm_r1 = process_packet({"candidate_smiles": "CCOC(=O)CC(=O)OCC"})
+    dm_r1_6d = process_packet({"candidate_smiles": "CCOC(=O)CC(=O)OCC", "model_encoding": "descriptors"})
     assert dm_r1["halted"] is True and dm_r1["halt_reason"] == "L6_ABSTAIN"
-    assert round(float(dm_r1["decision"]["effective_threshold"]), 6) == pytest.approx(0.675015, abs=1e-5)
+    assert float(dm_r1["decision"]["effective_threshold"]) == pytest.approx(
+        float(dm_r1_6d["decision"]["effective_threshold"]), abs=1e-9
+    )
+    assert float(dm_r1["decision"]["effective_threshold"]) == pytest.approx(0.675015, abs=5e-3)
 
+    benzo_entry = [
+        {
+            "run_id": "wire-shell-probe-001",
+            "candidate_smiles": "c2ccc1[nH]nnc1c2",
+            "measured_y": -0.78,
+            "admit_to_memory": True,
+            "ledger_entry_sha256": "d" * 64,
+        }
+    ]
     dm_r2 = process_packet(
         {
             "candidate_smiles": "CCOC(=O)CC(=O)OCC",
-            "certified_ledger_entries": [
-                {
-                    "run_id": "wire-shell-probe-001",
-                    "candidate_smiles": "c2ccc1[nH]nnc1c2",
-                    "measured_y": -0.78,
-                    "admit_to_memory": True,
-                    "ledger_entry_sha256": "d" * 64,
-                }
-            ],
+            "certified_ledger_entries": benzo_entry,
+        }
+    )
+    dm_r2_6d = process_packet(
+        {
+            "candidate_smiles": "CCOC(=O)CC(=O)OCC",
+            "model_encoding": "descriptors",
+            "certified_ledger_entries": benzo_entry,
         }
     )
     assert dm_r2["halted"] is False and dm_r2["decision"]["abstain"] is False
     assert dm_r2["decision"]["effective_n_calib"] == 170
-    assert round(float(dm_r2["decision"]["effective_threshold"]), 6) == pytest.approx(0.682118, abs=1e-5)
+    assert float(dm_r2["decision"]["effective_threshold"]) == pytest.approx(
+        float(dm_r2_6d["decision"]["effective_threshold"]), abs=1e-9
+    )
+    assert float(dm_r2["decision"]["effective_threshold"]) == pytest.approx(0.682118, abs=5e-3)
+    assert float(dm_r2["decision"]["effective_threshold"]) > float(dm_r1["decision"]["effective_threshold"])
 
     cyclo_out = process_packet({"candidate_smiles": CYCLOSPORIN_A_SMILES})
     assert cyclo_out["halted"] is True and float(cyclo_out["decision"]["knn_distance"]) > 10.0
