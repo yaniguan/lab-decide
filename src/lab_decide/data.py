@@ -351,6 +351,8 @@ def load_dataset(
     )
     if encoding == "rdkit_2d_morgan":
         X_mol = featurize_rdkit_2d_morgan_batch(bundle.smiles, strict=False)
+        if list(features) == list(ESOL_FEATURES) and bundle.X.shape[1] == len(ESOL_FEATURES):
+            X_mol[:, : len(ESOL_FEATURES)] = bundle.X
         return replace(
             bundle,
             X=X_mol,
